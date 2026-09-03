@@ -26,7 +26,6 @@ pub fn render(
     fleet_consensus: Option<(String, crate::divergence::Consensus)>,
     facet_agreement: &[(String, f64)],
     verdicts: &[(String, crate::divergence::Verdict)],
-    peer_note: Option<String>,
     theme: &Theme,
 ) {
     // The footer is a bordered block, so its height must account for every
@@ -46,14 +45,22 @@ pub fn render(
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),             // titlebar + tabs + underline
+            Constraint::Length(1),             // one line of chrome
             Constraint::Min(8),                // main content
             Constraint::Length(footer_height), // footer (+ search bar)
         ])
         .split(area);
 
     d::paint_bg(f, area, theme);
-    render_header(f, chunks[0], active_tab, peer_note, theme);
+    render_header(
+        f,
+        chunks[0],
+        super::AppView::Dashboard,
+        active_tab,
+        hosts,
+        sessions.len(),
+        theme,
+    );
 
     match active_tab {
         super::DashboardTab::Sessions => {
@@ -121,91 +128,25 @@ pub fn render(
 
 /// The titlebar and tab strip.
 ///
-/// Per the handoff: the title is centred, the right carries the peer
-/// indicator (`● 10 hosts · 3 diverged`), and the active tab is marked by a
-/// cyan underline rather than by a colour change alone.
+/// The global header, one line. See `tui::chrome`.
+///
+/// This used to be three rows: a centred title, a tab strip, and an underline
+/// row that was blank under every inactive tab. The v0.3.3 screen tour counted
+/// the dead band it left among the defects worth fixing, and the redesign's
+/// answer is that an active tab can be marked by weight and a background for
+/// no rows at all.
+#[allow(clippy::too_many_arguments)]
 fn render_header(
     f: &mut Frame,
     area: Rect,
+    view: super::AppView,
     active_tab: super::DashboardTab,
-    peer_note: Option<String>,
+    hosts: &[super::HostDisplay],
+    session_count: usize,
     theme: &Theme,
 ) {
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Length(2)])
-        .split(area);
-
-    // ── titlebar
-    let title = "ESSH";
-    let right = peer_note.unwrap_or_default();
-    let left_pad = (rows[0].width as usize / 2).saturating_sub(title.len() / 2);
-    let mut bar = vec![
-        Span::raw(" ".repeat(left_pad)),
-        Span::styled(title, Style::default().fg(theme.text_secondary)),
-    ];
-    if !right.is_empty() {
-        let used = left_pad + title.len();
-        let pad = (rows[0].width as usize)
-            .saturating_sub(used + right.chars().count() + 3)
-            .max(1);
-        bar.push(Span::raw(" ".repeat(pad)));
-        bar.push(d::dot(theme.status_warn));
-        bar.push(Span::raw(" "));
-        bar.push(Span::styled(right, Style::default().fg(theme.border)));
-    }
-    f.render_widget(Paragraph::new(Line::from(bar)), rows[0]);
-
-    // ── tab strip
-    let tabs = [
-        ("1", "Sessions", super::DashboardTab::Sessions),
-        ("2", "Hosts", super::DashboardTab::Hosts),
-        ("3", "Fleet", super::DashboardTab::Fleet),
-        ("4", "Config", super::DashboardTab::Config),
-    ];
-    let mut spans: Vec<Span> = vec![Span::raw(" ")];
-    let mut underline: Vec<Span> = vec![Span::raw(" ")];
-    for (n, label, tab) in &tabs {
-        let on = *tab == active_tab;
-        let text = format!("{} {}", n, label);
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(
-            n.to_string(),
-            Style::default().fg(theme.border),
-        ));
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(
-            label.to_string(),
-            if on {
-                Style::default()
-                    .fg(theme.text_emphasis)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme.text_secondary)
-            },
-        ));
-        spans.push(Span::raw(" "));
-        underline.push(Span::styled(
-            if on {
-                "─".repeat(text.chars().count() + 2)
-            } else {
-                " ".repeat(text.chars().count() + 2)
-            },
-            Style::default().fg(theme.brand),
-        ));
-    }
-    let now = chrono::Local::now().format("%H:%M:%S").to_string();
-    let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
-    let pad = (rows[1].width as usize)
-        .saturating_sub(used + now.len() + 2)
-        .max(1);
-    spans.push(Span::raw(" ".repeat(pad)));
-    spans.push(Span::styled(now, Style::default().fg(theme.border)));
-
-    f.render_widget(
-        Paragraph::new(vec![Line::from(spans), Line::from(underline)]),
-        rows[1],
-    );
+    let line = super::chrome::header(view, active_tab, hosts, session_count, area.width, theme);
+    f.render_widget(Paragraph::new(line), area);
 }
 
 fn render_sessions_tab(
@@ -499,13 +440,11 @@ fn render_hosts_tab(
                 .get(selected)
                 .is_some_and(|s| s.hostname == h.hostname && s.port == h.port);
 
-            let dot_color = match h.status {
-                super::HostStatus::Online => theme.status_good,
-                super::HostStatus::Offline => theme.status_error,
-                // Not a grey dot implying a reading — a colour that reads as
-                // "no signal".
-                super::HostStatus::NeverProbed => theme.absent,
-            };
+            // SPEC §1: the dot carries the state, and the state is a
+            // partition, so this is one lookup rather than a second opinion
+            // about reachability.
+            let state = h.state();
+            let dot_color = state.color(theme);
 
             let diverge = match h.diverge_count {
                 None => Span::styled(

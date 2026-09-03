@@ -224,6 +224,8 @@ fn universal_rules(screen: &str, beat: &str) {
         panic!("[{beat}] `{bad}` — a count that disagrees with its noun:\n{screen}");
     }
 
+    header_states_partition(screen, beat);
+
     // SPEC §8.5 — no binding split across rows by wrapping.
     for split in ["F4 /", "F9 new /", "/ forwards", "/ session"] {
         assert!(
@@ -559,6 +561,15 @@ fn disagreeing_counts(screen: &str) -> Vec<String> {
     ];
     let mut found = Vec::new();
     for line in screen.lines() {
+        // The global header is the one line where a leading digit is an
+        // ordinal: `1 sessions` is the first tab, not a count of one session.
+        // This used to be exempted by capitalisation, which stopped working
+        // the moment the redesign lowercased the tab labels — so the header
+        // is exempted by being the header, and `header_states_partition`
+        // covers it instead.
+        if is_header(line) {
+            continue;
+        }
         let words: Vec<&str> = line.split_whitespace().collect();
         for pair in words.windows(2) {
             if pair[0] != "1" {
@@ -583,6 +594,45 @@ fn disagreeing_counts(screen: &str) -> Vec<String> {
         }
     }
     found
+}
+
+/// The global header: `ESSH`, the tab strip, then the fleet's state counts.
+fn is_header(line: &str) -> bool {
+    line.trim_start().starts_with("ESSH ")
+}
+
+/// SPEC §1. The header's counts are a partition, so each state appears at
+/// most once and every word in it is a state.
+///
+/// The v2 handoff's header reads `9 up · 1 busy · 1 offline` over eleven
+/// hosts. It sums, and it is still wrong: the host whose connection reset six
+/// minutes ago is inside the `up` count, on the same screen that explains the
+/// reset. This is the assertion that shape cannot pass.
+fn header_states_partition(screen: &str, beat: &str) {
+    const STATES: [&str; 5] = ["up", "busy", "dropped", "offline", "unprobed"];
+    let Some(header) = screen.lines().find(|l| is_header(l)) else {
+        return;
+    };
+    // Everything after the last tab label is the counts block.
+    let Some(counts) = header.split("4 config").nth(1) else {
+        return;
+    };
+    let words: Vec<&str> = counts.split_whitespace().collect();
+    let mut seen: Vec<&str> = Vec::new();
+    for pair in words.windows(2) {
+        if pair[0].parse::<usize>().is_err() {
+            continue;
+        }
+        if !STATES.contains(&pair[1]) {
+            continue;
+        }
+        assert!(
+            !seen.contains(&pair[1]),
+            "[{beat}] the header counts `{}` twice:\n{screen}",
+            pair[1]
+        );
+        seen.push(pair[1]);
+    }
 }
 
 /// The host name on the row carrying the selection marker.

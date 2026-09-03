@@ -4585,8 +4585,20 @@ fn apply_probe_state(app: &mut App, prober: &fleet::FleetProber) {
                 host.status = HostStatus::Online;
                 host.latency_ms = state.result.latency_ms;
             } else {
-                host.status = HostStatus::Offline;
+                // SPEC §1: a host that answered and then stopped is dropped,
+                // and has a session and a scrollback to reconnect into. One
+                // that has never answered is offline, and has nothing.
+                host.status = if state.ever_online {
+                    HostStatus::Dropped
+                } else {
+                    HostStatus::Offline
+                };
                 host.latency_ms = None;
+                // A dropped host keeps its last reading, labelled as such by
+                // whatever renders it. An offline host never had one.
+                if !state.ever_online {
+                    host.vitals = Default::default();
+                }
             }
             host.latency_history = state.latency_history.clone();
         }
@@ -4648,6 +4660,7 @@ fn load_hosts_into_app(app: &mut App, config: &AppConfig) -> anyhow::Result<()> 
                     latency_history: Vec::new(),
                     jump_host,
                     diverge_count: None,
+                    vitals: Default::default(),
                 });
             }
         }
@@ -4676,6 +4689,7 @@ fn load_hosts_into_app(app: &mut App, config: &AppConfig) -> anyhow::Result<()> 
                 latency_history: Vec::new(),
                 jump_host: entry.jump_host.clone().filter(|j| !j.is_empty()),
                 diverge_count: None,
+                vitals: Default::default(),
             });
         }
     }
@@ -5942,6 +5956,7 @@ fn host_display_for_candidate(c: &launcher::Candidate) -> HostDisplay {
         latency_history: Vec::new(),
         jump_host: None,
         diverge_count: None,
+        vitals: Default::default(),
     }
 }
 
@@ -6015,6 +6030,7 @@ async fn restore_one_session(
             latency_history: Vec::new(),
             jump_host: None,
             diverge_count: None,
+            vitals: Default::default(),
         },
     };
     if let Some(u) = &session.user {

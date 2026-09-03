@@ -59,6 +59,24 @@ pub const ROW_SELECTED_BG: Color = Color::Rgb(0x10, 0x1a, 0x1f);
 /// headline `GREEN` so a table of them does not glow.
 pub const GREEN_MUTED: Color = Color::Rgb(0x3b, 0xb6, 0x73);
 
+/// The title strip behind a panel's name, and the command palette's card.
+/// One step off `BG`: enough for a border to read against, not enough to
+/// become a second background. SPEC §5.2 collapses the reference's six
+/// near-black grounds into three, and this is the middle one.
+pub const PANEL_ALT: Color = Color::Rgb(0x10, 0x1a, 0x1f);
+
+/// Scrollback and the command input. Below `BG`, so a shell reads as a hole
+/// in the UI rather than as another panel.
+pub const TERMINAL_BG: Color = Color::Rgb(0x08, 0x0f, 0x13);
+
+/// The empty cells of a meter. Visible as a track, invisible as a value.
+pub const METER_TRACK: Color = Color::Rgb(0x16, 0x23, 0x2a);
+
+/// The border of the focused pane. SPEC §4.1 hangs the quick-connect digits
+/// on panel focus, so focus has to be visible and cannot be drawn from
+/// `border`.
+pub const BORDER_FOCUS: Color = Color::Rgb(0x2f, 0x55, 0x60);
+
 /// Divergence ramp. Consensus is faint; the further from consensus, the
 /// hotter. **Red means "you are alone"** — never "this number is large".
 pub const RAMP_DIV: [Color; 5] = [
@@ -79,6 +97,20 @@ pub const RAMP_OK: [Color; 5] = [
     Color::Rgb(0x3b, 0xb6, 0x73),
     Color::Rgb(0x5c, 0xd9, 0x89),
     Color::Rgb(0xa6, 0xf2, 0xc0),
+];
+
+/// Utilisation ramp, green to amber to red, for a meter whose high end is
+/// bad. SPEC §5.3.
+///
+/// Distinct from `RAMP_OK`, which is magnitude and never reaches red. This
+/// one is read by *position along the scale*, so the amber stop sits where
+/// 60% of the meter's width is, not where a value happens to fall.
+pub const RAMP_UTIL: [Color; 5] = [
+    Color::Rgb(0x35, 0xd0, 0x7f),
+    Color::Rgb(0x8f, 0xcc, 0x66),
+    Color::Rgb(0xe3, 0xbf, 0x4d),
+    Color::Rgb(0xe8, 0x8f, 0x4f),
+    Color::Rgb(0xef, 0x5f, 0x52),
 ];
 
 /// Network ramp, magnitude, secondary.
@@ -127,6 +159,78 @@ pub fn meter(fraction: f64, width: usize) -> (String, String) {
     let filled = ((fraction.clamp(0.0, 1.0)) * width as f64).round() as usize;
     let filled = filled.min(width);
     ("█".repeat(filled), "░".repeat(width - filled))
+}
+
+/// A meter whose cells are coloured by **position along the scale**, not by
+/// the value. SPEC §5.3.
+///
+/// This is the btop device the redesign is built on, and the distinction is
+/// the whole point of it. Colour the run by value and a meter at 40% and one
+/// at 95% are the same colour at their left edge, so the eye has to read the
+/// length to learn anything. Colour by position and the amber cells sit at
+/// 60% of the width on every row in the table, so a meter that reaches them
+/// is visibly past the same mark as its neighbours.
+///
+/// Returns one span per filled cell, then one span for the track. Callers
+/// push them straight into a `Line`.
+///
+/// Under a theme that defers to the terminal there is no gradient to sample:
+/// a five-stop RGB ramp has no 16-colour form. The run collapses to a single
+/// themed colour chosen by threshold, which is `design::meter`'s behaviour
+/// with the theme's own slots.
+pub fn meter_ramped(
+    fraction: f64,
+    width: usize,
+    ramp: &[Color; 5],
+    t: &crate::theme::Theme,
+) -> Vec<Span<'static>> {
+    let filled = ((fraction.clamp(0.0, 1.0)) * width as f64).round() as usize;
+    let filled = filled.min(width);
+    let mut out = Vec::with_capacity(filled + 1);
+
+    if t.defers_to_terminal() {
+        let flat = match fraction {
+            f if f >= 0.85 => t.status_error,
+            f if f >= 0.60 => t.status_warn,
+            _ => t.status_good,
+        };
+        out.push(Span::styled("█".repeat(filled), Style::default().fg(flat)));
+    } else {
+        for cell in 0..filled {
+            // Position of this cell's centre along the full scale. A
+            // one-cell meter samples the middle of the ramp rather than its
+            // cold end, which is what `cell / width` would give.
+            let at = (cell as f64 + 0.5) / width.max(1) as f64;
+            out.push(Span::styled("█", Style::default().fg(ramp_at(ramp, at))));
+        }
+    }
+
+    if filled < width {
+        out.push(Span::styled(
+            "░".repeat(width - filled),
+            Style::default().fg(t.meter_track),
+        ));
+    }
+    out
+}
+
+/// A meter in one flat colour, on the themed track. Memory and disk, which
+/// SPEC §5.3 keeps flat so that CPU's ramp is the only gradient in the row.
+pub fn meter_flat(
+    fraction: f64,
+    width: usize,
+    color: Color,
+    t: &crate::theme::Theme,
+) -> Vec<Span<'static>> {
+    let (fill, track) = meter(fraction, width);
+    let mut out = Vec::with_capacity(2);
+    if !fill.is_empty() {
+        out.push(Span::styled(fill, Style::default().fg(color)));
+    }
+    if !track.is_empty() {
+        out.push(Span::styled(track, Style::default().fg(t.meter_track)));
+    }
+    out
 }
 
 // ── Sparklines ───────────────────────────────────────────────────────────
@@ -395,5 +499,116 @@ mod tests {
         let s = sparkline(&[10, 10, 10], 4, 10);
         // Full column = all four dots in both sub-columns.
         assert!(s.chars().all(|c| c == '⣿'), "got {}", s);
+    }
+
+    // ── Ramped meters (SPEC §5.3) ────────────────────────────────────────
+
+    fn colours(spans: &[ratatui::text::Span]) -> Vec<Color> {
+        spans
+            .iter()
+            .flat_map(|s| std::iter::repeat_n(s.style.fg.expect("fg"), s.content.chars().count()))
+            .collect()
+    }
+
+    /// The distinction the whole device rests on.
+    ///
+    /// A meter coloured by value paints every one of its cells the same, so a
+    /// column of them tells you nothing until you measure their lengths. A
+    /// meter coloured by position puts the amber cells at the same column on
+    /// every row, and a bar that reaches them has visibly passed the same
+    /// mark as its neighbours.
+    #[test]
+    fn a_ramped_meter_colours_by_position_not_by_value() {
+        let t = crate::theme::dark();
+        let full = meter_ramped(1.0, 10, &RAMP_UTIL, &t);
+        let cs = colours(&full);
+        assert_eq!(cs.len(), 10);
+        assert_ne!(cs[0], cs[9], "a full meter is a gradient, not a block");
+
+        // The same cell is the same colour whatever the value, because its
+        // colour comes from where it sits on the scale.
+        let half = meter_ramped(0.5, 10, &RAMP_UTIL, &t);
+        let hs = colours(&half);
+        assert_eq!(hs.len(), 10);
+        for i in 0..5 {
+            assert_eq!(hs[i], cs[i], "cell {i} changed colour with the value");
+        }
+    }
+
+    #[test]
+    fn a_ramped_meter_tracks_its_empty_cells() {
+        let t = crate::theme::dark();
+        let spans = meter_ramped(0.3, 10, &RAMP_UTIL, &t);
+        let rendered: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(rendered.chars().count(), 10);
+        assert_eq!(rendered.matches('█').count(), 3);
+        assert_eq!(rendered.matches('░').count(), 7);
+        assert_eq!(colours(&spans)[9], t.meter_track);
+    }
+
+    /// The `terminal` theme pins no RGB. A five-stop gradient has no
+    /// 16-colour form, so the run collapses to one themed slot rather than
+    /// leaking the fixed values the theme exists to avoid.
+    #[test]
+    fn the_terminal_theme_gets_a_flat_meter_and_no_rgb() {
+        let t = crate::theme::terminal();
+        for (fraction, expected) in [
+            (0.2, t.status_good),
+            (0.7, t.status_warn),
+            (0.95, t.status_error),
+        ] {
+            let spans = meter_ramped(fraction, 12, &RAMP_UTIL, &t);
+            let filled: Vec<Color> = spans
+                .iter()
+                .filter(|s| s.content.contains('█'))
+                .map(|s| s.style.fg.expect("fg"))
+                .collect();
+            assert_eq!(filled, vec![expected], "fraction {fraction}");
+            for span in &spans {
+                assert!(
+                    !matches!(span.style.fg, Some(Color::Rgb(..))),
+                    "terminal theme leaked an RGB value"
+                );
+            }
+        }
+    }
+
+    /// A one-cell meter samples the middle of the ramp. `cell / width` would
+    /// give it the cold end, so every narrow meter in a table would read as
+    /// healthy no matter what it measured.
+    #[test]
+    fn a_one_cell_meter_is_not_stuck_at_the_cold_end() {
+        let t = crate::theme::dark();
+        let one = meter_ramped(1.0, 1, &RAMP_UTIL, &t);
+        assert_eq!(colours(&one)[0], ramp_at(&RAMP_UTIL, 0.5));
+    }
+
+    #[test]
+    fn a_flat_meter_is_one_colour_on_the_themed_track() {
+        let t = crate::theme::dark();
+        let spans = meter_flat(0.5, 8, t.status_info, &t);
+        let cs = colours(&spans);
+        assert_eq!(cs.len(), 8);
+        assert!(cs[..4].iter().all(|c| *c == t.status_info));
+        assert!(cs[4..].iter().all(|c| *c == t.meter_track));
+    }
+
+    #[test]
+    fn an_empty_and_a_full_meter_still_measure_their_width() {
+        let t = crate::theme::dark();
+        for f in [0.0, 1.0] {
+            for w in [1usize, 7, 8, 20] {
+                let ramped: String = meter_ramped(f, w, &RAMP_UTIL, &t)
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect();
+                let flat: String = meter_flat(f, w, t.status_good, &t)
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect();
+                assert_eq!(ramped.chars().count(), w);
+                assert_eq!(flat.chars().count(), w);
+            }
+        }
     }
 }

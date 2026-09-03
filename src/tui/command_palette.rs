@@ -78,7 +78,8 @@ impl CommandPalette {
         for (i, host) in hosts.iter().enumerate() {
             let status = match host.status {
                 HostStatus::Online => "●",
-                HostStatus::Offline => "○",
+                HostStatus::Dropped => "●",
+                HostStatus::Offline => "◌",
                 HostStatus::NeverProbed => "?",
             };
             entries.push(PaletteEntry {

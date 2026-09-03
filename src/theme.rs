@@ -58,6 +58,30 @@ pub struct Theme {
     /// bad, and from `text_muted`, which is text. A host that has never been
     /// probed is not a failing host.
     pub absent: Color,
+
+    // ── The v2 redesign's five (SPEC §5.1) ──────────────────────────────
+    /// The strip behind a panel's title, and the command palette's card.
+    ///
+    /// The reference names six near-black grounds inside a 7-point luminance
+    /// range. On a terminal they are one colour, and under `terminal` they
+    /// cannot be expressed at all. SPEC §5.2 collapses them to three: `bg`,
+    /// this, and `terminal_bg`.
+    pub panel_alt: Color,
+
+    /// Scrollback and the command input, below `bg`.
+    pub terminal_bg: Color,
+
+    /// The footer bar. Its own slot because a theme may want the footer to
+    /// sit apart from the panel strip even when the two share a value here.
+    pub footer_bg: Color,
+
+    /// The empty cells of a meter. Reads as a track, never as a value.
+    pub meter_track: Color,
+
+    /// The focused pane's border. SPEC §4.1 hangs quick connect's digits on
+    /// panel focus, so focus is load-bearing and cannot be drawn from
+    /// `border`.
+    pub border_focus: Color,
 }
 
 impl Theme {
@@ -200,6 +224,14 @@ pub fn terminal() -> Theme {
         bg: Color::Reset,
         muted_good: Color::Green,
         absent: Color::DarkGray,
+        // Three grounds that are all the terminal's own. This theme's whole
+        // promise is that it pins no colour; a "slightly lifted panel" would
+        // be a fixed RGB value by another name.
+        panel_alt: Color::Reset,
+        terminal_bg: Color::Reset,
+        footer_bg: Color::Reset,
+        meter_track: Color::DarkGray,
+        border_focus: Color::Cyan,
     }
 }
 
@@ -236,6 +268,11 @@ pub fn dark() -> Theme {
         bg: d::BG,
         muted_good: d::GREEN_MUTED,
         absent: d::NEVER_DOT,
+        panel_alt: d::PANEL_ALT,
+        terminal_bg: d::TERMINAL_BG,
+        footer_bg: d::PANEL_ALT,
+        meter_track: d::METER_TRACK,
+        border_focus: d::BORDER_FOCUS,
     }
 }
 
@@ -264,6 +301,13 @@ pub fn light() -> Theme {
         bg: Color::Rgb(250, 250, 248),
         muted_good: Color::Rgb(60, 160, 100),
         absent: Color::Rgb(190, 190, 190),
+        panel_alt: Color::Rgb(242, 242, 238),
+        // The one theme where the scrollback is *lighter* than the panel:
+        // paper's hole in the UI is a sheet of paper, not a shadow.
+        terminal_bg: Color::Rgb(255, 255, 255),
+        footer_bg: Color::Rgb(238, 238, 234),
+        meter_track: Color::Rgb(220, 220, 214),
+        border_focus: Color::Rgb(0, 120, 180),
     }
 }
 
@@ -304,6 +348,12 @@ pub fn solarized() -> Theme {
         bg: base03,
         muted_good: Color::Rgb(101, 123, 0),
         absent: base01,
+        // base02, solarized's own panel tone.
+        panel_alt: Color::Rgb(7, 54, 66),
+        terminal_bg: Color::Rgb(0, 31, 39),
+        footer_bg: Color::Rgb(7, 54, 66),
+        meter_track: Color::Rgb(10, 69, 82),
+        border_focus: cyan,
     }
 }
 
@@ -343,6 +393,11 @@ pub fn dracula() -> Theme {
         bg,
         muted_good: Color::Rgb(56, 176, 87),
         absent: comment,
+        panel_alt: Color::Rgb(47, 49, 64),
+        terminal_bg: Color::Rgb(33, 34, 44),
+        footer_bg: Color::Rgb(47, 49, 64),
+        meter_track: Color::Rgb(58, 61, 78),
+        border_focus: purple,
     }
 }
 
@@ -383,6 +438,12 @@ pub fn nord() -> Theme {
         bg: polar0,
         muted_good: Color::Rgb(126, 148, 108),
         absent: Color::Rgb(76, 86, 106),
+        // polar1 and polar2, nord's own elevation steps.
+        panel_alt: Color::Rgb(59, 66, 82),
+        terminal_bg: Color::Rgb(39, 44, 54),
+        footer_bg: Color::Rgb(59, 66, 82),
+        meter_track: Color::Rgb(67, 76, 94),
+        border_focus: frost1,
     }
 }
 
@@ -405,6 +466,10 @@ pub fn ocean() -> Theme {
 pub fn sky() -> Theme {
     Theme {
         bg: Color::Rgb(0x22, 0x4F, 0xBC),
+        panel_alt: Color::Rgb(0x1C, 0x42, 0x99),
+        terminal_bg: Color::Rgb(0x17, 0x35, 0x7C),
+        footer_bg: Color::Rgb(0x1C, 0x42, 0x99),
+        meter_track: Color::Rgb(0x3A, 0x66, 0xC6),
         ..sky_palette("sky")
     }
 }
@@ -444,6 +509,13 @@ fn sky_palette(name: &'static str) -> Theme {
         bg: Color::Reset,
         muted_good: Color::Rgb(0x27, 0xB0, 0x1B),
         absent: muted_readable,
+        // `sky` overrides these with tones of its blue ground; `ocean` keeps
+        // them `Reset` so the terminal's own profile shows through.
+        panel_alt: Color::Reset,
+        terminal_bg: Color::Reset,
+        footer_bg: Color::Reset,
+        meter_track: muted_readable,
+        border_focus: bright_cyan,
     }
 }
 
@@ -479,9 +551,14 @@ mod tests {
             "NEVER_DOT",
             "ROW_SELECTED_BG",
             "GREEN_MUTED",
+            "PANEL_ALT",
+            "TERMINAL_BG",
+            "METER_TRACK",
+            "BORDER_FOCUS",
             "RAMP_DIV",
             "RAMP_OK",
             "RAMP_NET",
+            "RAMP_UTIL",
         ];
         const HELPERS: &[&str] = &[
             "divergence(",
@@ -621,6 +698,107 @@ mod tests {
     /// footer in essh stayed *Watch-teal under every theme.
     ///
     /// Any design helper that returns styled output has to take a `Theme`.
+    /// Phase 1's gate. SPEC §5.1.
+    ///
+    /// Five new slots times nine palettes is exactly where a redesign quietly
+    /// regresses: a palette gets four of them, the fifth falls back to
+    /// `Default` or to whatever the author pasted last, and nobody notices
+    /// until a screenshot review three phases later. This walks every slot of
+    /// every theme rather than trusting that.
+    #[test]
+    fn every_theme_fills_every_slot() {
+        // `Color` has no reflection, so the slots are listed. A new field
+        // added to the struct and not added here is caught by the count
+        // assertion below rather than passing silently.
+        for name in THEME_NAMES {
+            let t = by_name(name);
+            let slots: Vec<(&str, Color)> = vec![
+                ("brand", t.brand),
+                ("active_tab", t.active_tab),
+                ("inactive_tab", t.inactive_tab),
+                ("border", t.border),
+                ("separator", t.separator),
+                ("text_primary", t.text_primary),
+                ("text_secondary", t.text_secondary),
+                ("text_muted", t.text_muted),
+                ("text_inverse", t.text_inverse),
+                ("text_emphasis", t.text_emphasis),
+                ("status_good", t.status_good),
+                ("status_warn", t.status_warn),
+                ("status_error", t.status_error),
+                ("status_info", t.status_info),
+                ("rx_rate", t.rx_rate),
+                ("tx_rate", t.tx_rate),
+                ("key_hint", t.key_hint),
+                ("selection_bg", t.selection_bg),
+                ("highlight_bg", t.highlight_bg),
+                ("bg", t.bg),
+                ("muted_good", t.muted_good),
+                ("absent", t.absent),
+                ("panel_alt", t.panel_alt),
+                ("terminal_bg", t.terminal_bg),
+                ("footer_bg", t.footer_bg),
+                ("meter_track", t.meter_track),
+                ("border_focus", t.border_focus),
+            ];
+            assert_eq!(
+                slots.len(),
+                27,
+                "a slot was added to Theme and not to this table"
+            );
+
+            // The three grounds are allowed to equal each other and `bg`:
+            // SPEC §5.2 collapses six near-black reference tokens into three,
+            // and a theme that defers to the terminal collapses them further.
+            // What none of them may be is the colour of the text that lands
+            // on them.
+            // `Reset` is exempt: as a background it is the terminal's own
+            // ground and as a foreground its own text, which are two
+            // different colours wearing one name.
+            for slot in ["panel_alt", "terminal_bg", "footer_bg"] {
+                let ground = slots.iter().find(|(s, _)| *s == slot).expect(slot).1;
+                if ground == Color::Reset {
+                    continue;
+                }
+                assert_ne!(
+                    ground, t.text_primary,
+                    "{name}.{slot} is the same colour as the text on it"
+                );
+            }
+
+            // Focus has to be visible against the border it replaces, or the
+            // quick-connect digits of SPEC §4.1 fire with nothing on screen
+            // to say which panel has them.
+            assert_ne!(
+                t.border_focus, t.border,
+                "{name}: focus is indistinguishable from an unfocused border"
+            );
+            assert_ne!(
+                t.meter_track, t.status_good,
+                "{name}: an empty meter cell reads as a full one"
+            );
+        }
+    }
+
+    /// `ocean` sits on the terminal's own ground and `sky` paints one. The
+    /// pair is otherwise identical, and the three background slots have to
+    /// follow that split or `ocean` grows opaque panels over the profile the
+    /// user chose it for.
+    #[test]
+    fn ocean_keeps_the_terminals_ground_and_sky_paints_one() {
+        let o = ocean();
+        for colour in [o.bg, o.panel_alt, o.terminal_bg, o.footer_bg] {
+            assert_eq!(colour, Color::Reset, "ocean painted over the terminal");
+        }
+        let s = sky();
+        for colour in [s.bg, s.panel_alt, s.terminal_bg, s.footer_bg] {
+            assert!(
+                matches!(colour, Color::Rgb(..)),
+                "sky left a ground unpainted"
+            );
+        }
+    }
+
     #[test]
     fn design_helpers_that_return_style_take_a_theme() {
         let src = std::fs::read_to_string(
@@ -731,6 +909,14 @@ mod tests {
             t.bg,
             t.muted_good,
             t.absent,
+            // The v2 slots. Three of them are grounds, which is exactly the
+            // shape of slot that gets a "slightly lifted panel" pasted into
+            // it — a fixed RGB value by another name.
+            t.panel_alt,
+            t.terminal_bg,
+            t.footer_bg,
+            t.meter_track,
+            t.border_focus,
         ];
         for c in slots {
             assert!(!matches!(c, Color::Rgb(..)), "{c:?} is fixed RGB");

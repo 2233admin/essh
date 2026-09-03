@@ -16,6 +16,14 @@ pub struct HostProbeState {
     pub result: ProbeResult,
     pub latency_history: Vec<u64>,
     pub history_capacity: usize,
+    /// Whether this host has ever answered in this run.
+    ///
+    /// It is the only thing that separates "the connection reset" from "it
+    /// has never answered", and SPEC §1 hangs two different words, two
+    /// glyphs and two recovery keys on that difference. Deriving it from a
+    /// non-empty latency history would work today and break the first time
+    /// a probe succeeds without recording a latency.
+    pub ever_online: bool,
 }
 
 impl HostProbeState {
@@ -28,10 +36,12 @@ impl HostProbeState {
             },
             latency_history: Vec::with_capacity(capacity),
             history_capacity: capacity,
+            ever_online: false,
         }
     }
 
     pub fn record(&mut self, result: ProbeResult) {
+        self.ever_online |= result.online;
         if let Some(ms) = result.latency_ms {
             self.latency_history.push(ms as u64);
             if self.latency_history.len() > self.history_capacity {

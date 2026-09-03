@@ -1,3 +1,4 @@
+pub mod chrome;
 pub mod command_palette;
 pub mod dashboard;
 pub mod divergence_view;
@@ -99,11 +100,119 @@ pub struct HostDisplay {
     /// different statement from `Some(0)`, "we checked and it agrees". v1
     /// collapsed both into `Unknown` and lost the distinction.
     pub diverge_count: Option<usize>,
+    /// What the fleet sampler last read off this host. SPEC §6.1.
+    pub vitals: HostVitals,
 }
 
+/// Per-host readings from the fleet sampler.
+///
+/// Every field is an `Option` and every `None` renders `—`. A zero here would
+/// be a measurement, and we have not taken one. That distinction is the whole
+/// reason `MetricState` exists for the attached host's monitor, and the
+/// fleet-wide table needs it more, not less: eleven rows of confident zeroes
+/// is a worse lie than one.
+#[derive(Clone, Debug, Default)]
+pub struct HostVitals {
+    pub cpu_pct: Option<f64>,
+    pub mem_pct: Option<f64>,
+    /// Busiest mounted filesystem, which is the one worth alarming on.
+    pub disk_pct: Option<f64>,
+    pub load1: Option<f64>,
+    pub cores: Option<usize>,
+    /// When CPU first crossed `CPU_BUSY_PCT` and has stayed over it since.
+    ///
+    /// The threshold is sustained, not instantaneous: a compile that spikes
+    /// one sample must not move a host into `busy` and back out again on the
+    /// next frame. `None` means it is not currently over.
+    pub cpu_over_since: Option<std::time::Instant>,
+    pub sampled_at: Option<std::time::Instant>,
+    /// Set when the host answers TCP but the sampler could not read metrics
+    /// off it. Reachable with no numbers is a fourth thing the table has to
+    /// say, and it is not the same as offline.
+    pub unreadable: Option<String>,
+}
+
+/// SPEC §1's thresholds.
+pub const CPU_BUSY_PCT: f64 = 90.0;
+pub const MEM_BUSY_PCT: f64 = 90.0;
+pub const DISK_BUSY_PCT: f64 = 80.0;
+/// How long CPU has to stay over before it counts. SPEC §1 rule 3.
+pub const CPU_BUSY_FOR: std::time::Duration = std::time::Duration::from_secs(120);
+
+impl HostVitals {
+    /// The threshold this host has crossed, worst first, with the words the
+    /// health screen prints. `None` when nothing is over.
+    pub fn crossed(&self) -> Option<(&'static str, f64)> {
+        if let (Some(cpu), Some(since)) = (self.cpu_pct, self.cpu_over_since) {
+            if cpu >= CPU_BUSY_PCT && since.elapsed() >= CPU_BUSY_FOR {
+                return Some(("cpu", cpu));
+            }
+        }
+        if let Some(mem) = self.mem_pct {
+            if mem >= MEM_BUSY_PCT {
+                return Some(("mem", mem));
+            }
+        }
+        if let Some(disk) = self.disk_pct {
+            if disk >= DISK_BUSY_PCT {
+                return Some(("disk", disk));
+            }
+        }
+        None
+    }
+}
+
+impl HostDisplay {
+    /// SPEC §1. Reachability first, thresholds only for a host that answers.
+    pub fn state(&self) -> HostState {
+        match self.status {
+            HostStatus::NeverProbed => HostState::Unprobed,
+            HostStatus::Offline => HostState::Offline,
+            HostStatus::Dropped => HostState::Dropped,
+            HostStatus::Online => {
+                if self.vitals.crossed().is_some() {
+                    HostState::Busy
+                } else {
+                    HostState::Up
+                }
+            }
+        }
+    }
+}
+
+/// The header's counts. SPEC §1, and the property the handoff's three counts
+/// do not have: these sum to `hosts.len()`, because `state()` is total.
+///
+/// Returned in `HostState::ORDER`, with the zeroes left in. The caller drops
+/// them, because a header that prints `0 dropped` invites the reader to
+/// wonder what dropped.
+pub fn fleet_counts(hosts: &[HostDisplay]) -> [(HostState, usize); 5] {
+    let mut out = HostState::ORDER.map(|s| (s, 0usize));
+    for host in hosts {
+        let state = host.state();
+        for slot in out.iter_mut() {
+            if slot.0 == state {
+                slot.1 += 1;
+            }
+        }
+    }
+    out
+}
+
+/// What the prober knows about reachability. Three facts, not two.
+///
+/// The v2 handoff spends one word, "offline", on a host whose connection
+/// reset and on a host that has never answered. They arrive from different
+/// evidence and offer different recovery, and SPEC §1 separates them. This is
+/// the same mistake v1 made with "unprobed", one layer down.
 #[derive(Clone, Debug, PartialEq)]
 pub enum HostStatus {
     Online,
+    /// Answered at least once this run, and does not now. The session and its
+    /// scrollback survive, so `r` reconnects into them.
+    Dropped,
+    /// Asked, and has never answered. There is nothing to reconnect to, so
+    /// `r` retries.
     Offline,
     /// Never probed — we have no evidence either way, and say so.
     NeverProbed,
@@ -119,10 +228,97 @@ impl HostStatus {
     pub fn label(&self) -> &'static str {
         match self {
             HostStatus::Online => "● online",
-            HostStatus::Offline => "● offline",
+            HostStatus::Dropped => "● dropped",
+            HostStatus::Offline => "◌ offline",
             HostStatus::NeverProbed => "  never probed",
         }
     }
+
+    pub fn is_reachable(&self) -> bool {
+        matches!(self, HostStatus::Online)
+    }
+}
+
+/// The state a host is shown in. SPEC §1.
+///
+/// Reachability crossed with thresholds. Every host is in exactly one of
+/// these, which is the property that lets the header's counts and the health
+/// screen's attention list read the same partition and therefore never
+/// disagree. The handoff's three counts do not have it: they sum to eleven
+/// only by filing a host whose connection reset under "up".
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HostState {
+    /// Answers, nothing over threshold.
+    Up,
+    /// Answers, at least one threshold crossed. Not an incident on its own:
+    /// the health screen has to name the cause.
+    Busy,
+    /// Answered, then the connection reset.
+    Dropped,
+    /// Has not answered since we started asking.
+    Offline,
+    /// Not asked yet. A transient of at most one probe cycle, and the reason
+    /// SPEC §1's four states are five here: on the first frame after start
+    /// every host is in this one, and calling that "offline" would be a lie
+    /// the size of the fleet.
+    Unprobed,
+}
+
+impl HostState {
+    /// The dot and the word, in header order.
+    pub fn glyph(&self) -> &'static str {
+        match self {
+            HostState::Offline | HostState::Unprobed => "◌",
+            _ => "●",
+        }
+    }
+
+    pub fn word(&self) -> &'static str {
+        match self {
+            HostState::Up => "up",
+            HostState::Busy => "busy",
+            HostState::Dropped => "dropped",
+            HostState::Offline => "offline",
+            HostState::Unprobed => "unprobed",
+        }
+    }
+
+    pub fn color(&self, t: &crate::theme::Theme) -> ratatui::style::Color {
+        match self {
+            HostState::Up => t.status_good,
+            HostState::Busy => t.status_warn,
+            HostState::Dropped => t.status_error,
+            HostState::Offline | HostState::Unprobed => t.absent,
+        }
+    }
+
+    /// Whether the health screen's attention list carries this state.
+    pub fn needs_attention(&self) -> bool {
+        matches!(
+            self,
+            HostState::Busy | HostState::Dropped | HostState::Offline
+        )
+    }
+
+    /// The recovery key the row must advertise, if any. SPEC §4.3 makes `r`
+    /// uniformly reconnect or retry, so the difference is the word.
+    pub fn recovery(&self) -> Option<&'static str> {
+        match self {
+            HostState::Dropped => Some("r reconnect"),
+            HostState::Offline => Some("r retry"),
+            _ => None,
+        }
+    }
+
+    /// Header order: worst last, so the eye lands on trouble at the end of a
+    /// left-to-right read.
+    pub const ORDER: [HostState; 5] = [
+        HostState::Up,
+        HostState::Busy,
+        HostState::Dropped,
+        HostState::Offline,
+        HostState::Unprobed,
+    ];
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -426,26 +622,6 @@ impl App {
             worst.key.label(),
             set.hosts.len().saturating_sub(1),
             worst.summary()
-        ))
-    }
-
-    /// The titlebar's right-hand note: fleet size and how many hosts differ.
-    ///
-    /// `None` when nothing has been probed, because "0 diverged" would read
-    /// as a clean bill of health for a fleet nobody has looked at.
-    pub fn peer_note(&self) -> Option<String> {
-        if self.host_facts.is_empty() {
-            return None;
-        }
-        let diverged = self
-            .hosts
-            .iter()
-            .filter(|h| h.diverge_count.is_some_and(|n| n > 0))
-            .count();
-        Some(format!(
-            "{} hosts · {} diverged",
-            self.hosts.len(),
-            diverged
         ))
     }
 
@@ -772,7 +948,6 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             let filtered_indices = app.filtered_host_indices();
             let groups = app.group_summaries();
             let fleet_consensus = app.fleet_consensus();
-            let peer_note = app.peer_note();
             let facet_agreement = app.facet_agreement();
             let verdicts = app.fleet_verdicts();
             dashboard::render(
@@ -792,7 +967,6 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 fleet_consensus,
                 &facet_agreement,
                 &verdicts,
-                peer_note,
                 &app.theme,
             );
         }
@@ -1144,6 +1318,7 @@ mod tests {
             latency_history: Vec::new(),
             jump_host: None,
             diverge_count: None,
+            vitals: Default::default(),
         }
     }
 
@@ -1328,6 +1503,7 @@ mod render_smoke {
             latency_history: Vec::new(),
             jump_host: None,
             diverge_count: None,
+            vitals: Default::default(),
         };
         app.hosts = vec![
             host("web-01", "10.0.0.1", "deploy"),
@@ -1694,6 +1870,7 @@ mod search_selection_tests {
             latency_history: Vec::new(),
             jump_host: None,
             diverge_count: None,
+            vitals: Default::default(),
         };
         app.hosts = vec![host("web-01"), host("db-01")];
         app
