@@ -1,0 +1,61 @@
+essh — screen tour
+==================
+22 screenshots of essh v0.3.3 (matthart1983/essh), captured 2026-09-03 from the
+release binary in a 150x34 terminal, JetBrains Mono Nerd Font.
+
+  gallery.html            all 22 shots with captions (open in a browser; images
+                          are embedded, no network needed)
+
+  01-launcher.png         bare `essh` — type to filter, Enter to connect
+  02-dashboard.png        [2] Hosts — ten hosts, tags, divergence, group consensus
+  03-divergence.png       [D] — why edge-01 is the outlier, facet by facet
+  04-fleet.png            [3] Fleet — 126 facet-checks and the verdict
+  05-config.png           [4] Config — where ~/.essh state lives
+  06-sessions.png         [1] Sessions — nine concurrent sessions
+  07-session.png          a real shell on web-02
+  08-monitor.png          [F2] — CPU, memory, network, disk, processes
+  09-mini-monitor.png     [F5] — the same data as a strip over the shell
+  10-files.png            [F3] — two-pane SFTP, mid-upload
+  11-forwards.png         [F4] — port forward manager
+  12-help.png             [F1] — keymap overlay
+  13-split.png            [Ctrl+A M] — terminal + monitor side by side
+  14-palette.png          [Ctrl+P] — command menu, filtered to themes
+  15-cli.png              `essh run web -- ...` and `essh why edge-01`
+  theme-terminal.png      [t] — ANSI-only, inherits your terminal palette
+  theme-light.png         [t] — light (shown on a light terminal ground)
+  theme-solarized.png     [t] — solarized
+  theme-dracula.png       [t] — dracula
+  theme-nord.png          [t] — nord
+  theme-ocean.png         [t] — fixed palette, your terminal's ground
+  theme-sky.png           [t] — paints Terminal.app's blue ground
+
+THE FLEET IS REAL, THE DISAGREEMENTS WERE STAGED
+------------------------------------------------
+The ten hosts are ten Debian containers (podman), each with its own hostname and
+loopback address (127.0.0.11-20:2222) running a real sshd. essh connects over
+russh with a real key; every metric, file listing and facet hash in these shots
+was collected over that connection.
+
+To give the divergence engine something to find, the fleet was made to disagree
+the way a real one does:
+  - edge-01  timezone set to Europe/Dublin, /etc/ssh/sshd_config hand-edited
+  - db-02    a comment appended to /etc/nsswitch.conf
+  - web-*    nginx installed (so listening ports differ from the rest)
+  - cache-01 redis installed
+Those are genuine differences between genuine hosts, deliberately created.
+
+BUGS VISIBLE IN THESE SHOTS
+---------------------------
+- 11-forwards.png  Both forwards report "Active" but nothing is bound: no
+  listener on 8080 or 15432 (`ss -ltn`), and curl to 127.0.0.1:8080 is refused
+  while nginx answers 200 inside the container.
+- 06-sessions.png  Session 1 — the only one opened with Enter from the dashboard
+  instead of F9 — stayed on "Connecting" indefinitely with a blank pane and never
+  collected facets. The eight opened with F9 connected in about a second.
+- 02-dashboard.png  The role=web group row prints its consensus figure twice:
+  "2 / 2 2 / 2 full consensus". The footer says "r probe", but `r` reloads the
+  host list and discards live probe state — every host reads as unreachable
+  until the next 60s probe cycle.
+- 03-divergence.png  "1 peers never probed".
+- 11-forwards.png  The add-forward format hint is clipped at the panel edge.
+- 12-help.png      Help text wraps mid-phrase: "F4 / forwards", "F9 new / session".

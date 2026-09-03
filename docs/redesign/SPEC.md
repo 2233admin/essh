@@ -1,348 +1,731 @@
-# ESSH TUI redesign — corrected handoff
+# ESSH TUI redesign v2, corrected handoff
 
-Supersedes `design_handoff_essh_tui_redesign/README.md` (2026-09-03). The design
-work in that document stands. This one fixes its arithmetic, resolves its
-conflicts with the code it targets, and fills in the sections a TUI needs and a
-web reference does not.
+Supersedes `superseded/SPEC-v1.md` and corrects `handoff-v2/README.md`
+(2026-09-04). The design direction in the handoff stands. This document fixes
+its arithmetic, resolves the three key bindings it double-books, gives every
+column a cell budget that fits 150x34, and names the collection work it
+presents as layout work.
 
-Read `ESSH Redesign.dc.html` for the look. Read this for the numbers, the
-widget mapping and the rules.
+Read `handoff-v2/redesign-v2.dc.html` for the look. Read this for the numbers,
+the widget mapping and the rules.
 
-## What changed from the original handoff
+v2 removes fleet configuration divergence from the product surface. See §8 for
+where it goes and what that costs.
 
-| # | Original | Corrected | Why |
+## 0. What the handoff gets wrong
+
+Sixteen findings, each with the correction this document adopts. Numbers 1, 3,
+5, 12 and 14 are the ones that would have shipped as visible defects.
+
+| # | Handoff | Corrected | Why |
 | --- | --- | --- | --- |
-| 1 | Header `● 1 unprobed`; hosts table lists 2 | 2 everywhere | The table and `role=web` both say 2; the summaries said 1 |
-| 2 | "sixteen 100% facets" | fourteen | 7 comparable hosts × 18 facets = 126 checks. 20 × 7 = 140 |
-| 3 | Header dots sum to 16 over 10 hosts | Two axes, stated separately | `reachable` and `diverged` overlap; the reader adds them |
-| 4 | Verdict "5 of 10 hosts" under an `env=prod` panel | "5 of the 7 comparable hosts" | Panel 1 is scoped to `env=prod`; panel 2 was fleet-wide |
-| 5 | Outliers panel: 6 rows | 5 rows | Only 5 hosts diverge |
-| 6 | `role=db` `1 / 2` | `—  no majority` | 2 hosts, 2 values: the winner was decided by string order |
-| 7 | CPU 11.5%, `load 4.64 4.31 5.14` | `load 0.92 0.81 0.74` | Load 4.64 on 8 cores is ~58% busy, not 11.5% |
-| 8 | Net flows don't sum to the headline | They sum | 8.3 MB/s down, 1.2 MB/s up |
-| 9 | `Block::bordered()` | `design::panel` | The repo already ported netwatch's panel idiom |
-| 10 | 24 hex tokens | `theme::Theme` slots + 6 new ones | The theme contract is semantic and already exists |
-| 11 | Six defects | Seven | The author's list has seven; the functional one was dropped |
-| 12 | No minimum size | §7 | It is a TUI; the window is whatever the user made it |
-| 13 | No `terminal` theme story | §6.3 | That theme switches the gradient ramps off by design |
+| 1 | Header `9 up · 1 busy · 1 offline` over 11 hosts | `7 up · 2 busy · 1 dropped · 1 offline` | The three counts sum to 11 only by filing edge-01 under "up" while the same screen says its connection reset 6 minutes ago. Four states, one host each, §1 |
+| 2 | `needs attention │ 3 of 11 hosts` | `4 of 11` | staging-web-01 is offline, and the handoff's own attention rule says offline enters the list. It was missing |
+| 3 | Health cards: web-02, db-01, build-01, edge-01 | The four attention hosts | The handoff says the cards are "only the hosts that need watching", then shows a healthy host and omits an offline one |
+| 4 | `offline` names both edge-01 and staging-web-01 | `dropped` and `offline` | One had a session and lost it, the other has never answered. They need different words, different glyphs and different recovery keys. This is the v1 "unprobed means two things" defect wearing a new hat |
+| 5 | Quick connect lists 5 hosts with no session | 6 | jump-01 has no session and is missing from the panel |
+| 6 | Digits bound to tabs, session jumps and quick connect on one screen | Tabs keep 1-4; quick connect takes digits only while focused | Three meanings for `1` on the sessions screen, §4 |
+| 7 | Footer is identical on all six screens and advertises `d detach · m monitor` | Footer is per screen | On the files screen `d` is download and `m` is mkdir. `no_advertised_command_does_nothing` fails the build on this |
+| 8 | web-02 `12 % cpu` with `load 0.4` on `8 cores` | `load 0.96` | 0.4 across 8 cores is 5% busy. db-01 (61%/4.9) and build-01 (94%/7.8) both use the 8-core relation. Only web-02 breaks it |
+| 9 | Sessions row 1 runs `deploy.sh`; the terminal screen shows it finished | deploy.sh still running, prompt not yet returned | Same session, same instant, two answers |
+| 10 | Session 2 CPU `61%`, equal to the db-01 host total | `52.4%` | The column is the session's process tree. `postgres: writer` is not in it |
+| 11 | Transfer: 120.0 KB file at `52% · 3.1 MB/s · 6s` | 38.8 MB | 48% of 120 KB clears in 20ms, not 6s. At 38.8 MB the rate and the ETA agree |
+| 12 | Activity timestamps contradict the durations beside them | Both derived from one clock, §2.3 | `pg_dump started 12:14` next to a session `up 42m` at 12:25 |
+| 13 | Palette `5 of 24`, missing `Monitor db-02` | `6 of 28` | 6 sessions + 11 new + 11 monitor is the population; `db` matches 6 of them |
+| 14 | Hosts CPU column `8ch`, MEM/DISK `9ch` | 12 / 13 / 13 | The handoff says the `ch` numbers are cell counts. At 8ch the meter gets 3 cells after the percentage, which cannot show a ramp. §3.2 |
+| 15 | Session HOST `13ch`, attention host `12ch`, busiest RSS `6ch` | 15 / 15 / 7 | `staging-web-01` is 14 characters and `16.8 MB` is 7 |
+| 16 | Add-forward row offers `R HOST:PORT → 127.0.0.1:PORT` | `L` form only | Remote forwards are not implemented and phase 0 refuses `R` with a reason. Advertising them is defect 2 of the original seven, rebuilt |
 
-## 1. Two probe states, never one word
+Two more that are not defects in the design but change what the work is:
 
-The original uses "unprobed" for two independent facts. They come from
-different mechanisms on different clocks, and conflating them is what produced
-corrections 1 and 3.
+- **The hosts screen needs metrics the app cannot collect.** §6.1. This is the
+  largest single item in v2 and the handoff does not mention it.
+- **Six near-black background tokens do not survive the trip to a terminal.**
+  §5.2.
 
-- **Reachability** — a TCP connect every 60s (`fleet::FleetProber`). Yields
-  `online`, an RTT, and the sparkline history. Answers *is it up*.
-- **Facet collection** — an SSH session that reads configuration
-  (`divergence::HostFacts`). Answers *what is on it*.
+## 1. Four host states, and they partition
 
-A host can be reachable with no facets (added a minute ago), and have facets
-while unreachable right now (probed earlier, down since). Render them
-separately: the status dot and RTT sparkline carry reachability, the DIVERGE
-column carries facet state.
+The handoff uses "offline" for a host whose connection reset and for a host
+that has never answered. They arrive from different mechanisms, need different
+words and offer different recovery, and conflating them is what produced
+findings 1, 2 and 4.
 
-Facet state is a three-way partition of the fleet, so the header's counts add
-up to the host count:
+| State | Glyph | Colour | Means | Recovery |
+| --- | --- | --- | --- | --- |
+| up | `●` | `status_good` | Answers, nothing over threshold | none |
+| busy | `●` | `status_warn` | Answers, at least one threshold crossed | none |
+| dropped | `●` | `status_error` | Answered, then the connection reset. Scrollback and session survive | `r` reconnect |
+| offline | `◌` | `absent` | Has not answered since we started asking | `r` retry |
 
-```
-● 3 at consensus   ● 5 diverged   ◌ 2 unprobed          9/10 reachable
-```
+The rules that assign them:
 
-A host with no facets shows `◌` in DIVERGE, the word `unprobed`, and is
-excluded from every agreement count with the exclusion stated in words. Never
-`0`, never counted as agreement.
+1. A host with no successful probe in this run of essh is `offline`. It has no
+   last reading, so it shows no figures at all. Never a `0` for unknown.
+2. A host that answered and then stopped is `dropped`. It has a last reading,
+   which is shown dimmed and labelled as the last reading.
+3. A reachable host is `busy` if any of: CPU over 90% sustained for 2 minutes,
+   memory over 90%, or any mounted filesystem over 80%. Sustained means every
+   sample in the window, so one spike does not flap the count.
+4. Otherwise `up`.
+
+Every host lands in exactly one state, so the header's four counts sum to the
+host count. This is the property the handoff's three counts do not have.
+
+The health screen's attention list is `busy + dropped + offline`, in that
+severity order reversed: dropped, offline, busy. The header and the health
+screen therefore cannot disagree, because they read the same partition. Assert
+it: `the_header_counts_partition_the_fleet`.
+
+Empty state matters as much as the list. With nothing over threshold the panel
+reads `nothing needs attention · 11 hosts reachable, none over threshold`, not
+an empty box.
 
 ## 2. The canonical fixture
 
-Every number on every screen derives from this table. The reference HTML, the
+Every number on every screen derives from this table. The design reference, the
 demo fleet and the render tests use it, so a number that disagrees with another
 screen is a bug rather than a judgement call.
 
-| host | env | region | role | reachable | facets | diverges on |
-| --- | --- | --- | --- | --- | --- | --- |
-| web-01 | prod | us-east | web | yes | **no** | — |
-| web-02 | prod | us-east | web | yes | yes | listening ports |
-| web-03 | prod | us-east | web | yes | yes | listening ports |
-| db-01 | prod | us-east | db | yes | yes | — |
-| db-02 | prod | us-east | db | yes | yes | /etc/nsswitch.conf |
-| cache-01 | prod | us-west | cache | yes | yes | listening ports |
-| edge-01 | prod | us-east | edge | yes | yes | timezone, /etc/ssh/sshd_config |
-| monitor-01 | prod | us-west | monitor | yes | yes | — |
-| build-01 | staging | us-west | build | yes | yes | — |
-| staging-web-01 | staging | us-east | web | **no** | **no** | — |
+Eleven Debian containers on `127.0.0.11`-`127.0.0.21:2222`, one hostname each,
+running a real sshd. `scripts/spec-demo.sh` builds the config from this table.
 
-Fleet-wide: 3 at consensus, 5 diverged, 2 unprobed, 9/10 reachable.
+### 2.1 Hosts
 
-### 2.1 Fleet consensus, scoped to `env=prod`
+Clock for every screen: `12:25:34`. All hosts have 8 cores.
 
-8 members, 1 unprobed (web-01), **7 comparable**. 18 facets × 7 = **126
-facet-checks**.
+| host | address | tags | state | sess | cpu | mem | disk / | rtt | load |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| web-01 | 127.0.0.11 | prod web | up | 0 | 8% | 31% | 22% | 0.4 | 0.64 |
+| web-02 | 127.0.0.12 | prod web | up | 1 | 12% | 46% | 24% | 0.4 | 0.96 |
+| web-03 | 127.0.0.13 | prod web | up | 0 | 15% | 38% | 26% | 0.6 | 1.20 |
+| db-01 | 127.0.0.14 | prod db | **busy** disk | 2 | 61% | 72% | **81%** | 0.5 | 4.88 |
+| db-02 | 127.0.0.15 | prod db | up | 0 | 14% | 44% | 29% | 0.7 | 1.12 |
+| cache-01 | 127.0.0.16 | prod cache | up | 1 | 6% | 58% | 18% | 0.3 | 0.48 |
+| edge-01 | 127.0.0.17 | prod edge | **dropped** | 1 | last 9% | last 41% | last 38% | × | — |
+| build-01 | 127.0.0.18 | ci build | **busy** cpu | 1 | **94%** | 66% | 47% | 0.5 | 7.52 |
+| monitor-01 | 127.0.0.19 | prod monitor | up | 0 | 21% | 52% | 63% | 0.4 | 1.68 |
+| staging-web-01 | 127.0.0.20 | staging web | **offline** | 0 | — | — | — | × | — |
+| jump-01 | 127.0.0.21 | prod jump | up | 0 | 3% | 19% | 11% | 1.2 | 0.24 |
 
-| facet | agree | % | colour |
+Header: `● 7 up  ● 2 busy  ● 1 dropped  ◌ 1 offline  │  6 sessions  12:25:34`.
+7 + 2 + 1 + 1 = 11.
+
+`load` is `cpu% × cores`, and the demo asserts the relation rather than the
+literal, because the demo fleet's real load is whatever the containers are
+doing. See §9.
+
+Sessions per host sum to 6. Hosts with no session, so the six rows of quick
+connect: web-01, web-03, db-02, monitor-01, staging-web-01, jump-01.
+
+### 2.2 Sessions
+
+Six sessions on five hosts.
+
+| # | host | state | running | up | cpu | last line | idle |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | web-02 | attached | `deploy.sh` | 14m | 1.4% | `nginx: reloading configuration…` | now |
+| 2 | db-01 | detached | `pg_dump` | 11m | 52.4% | `dumping table events … 78%` | 4s |
+| 3 | db-01 | detached | `-bash` | 2h | 0.0% | `matt@db-01:~$` | 18m |
+| 4 | build-01 | detached | `cargo build` | 11m | 89.3% | `Compiling ratatui v0.29.0` | 1s |
+| 5 | cache-01 | detached | `redis-cli` | 1h | 0.2% | `127.0.0.1:6379>` | 32m |
+| 6 | edge-01 | dropped | `tail -f` | 3h | — | `connection reset · r reconnect, scrollback kept` | 6m |
+
+CPU is the session's process tree, which is why session 2 reads 52.4% while
+db-01 reads 61%: `postgres: writer` belongs to the daemon, not to the session.
+Session 4 reads 89.3% against a host at 94% for the same reason.
+
+The dropped session shows `—` for CPU. A dropped session has no live process
+tree, and a stale percentage in a live column is the defect §1 exists to stop.
+
+### 2.3 Activity, and the clock
+
+At `12:25:34`, five events inside 15 minutes. Every duration on every other
+screen derives from these, so the two can never disagree.
+
+| at | event | what it pins |
+| --- | --- | --- |
+| 12:21 | `build-01 cpu over 90%` | attention row `over 90% for 4m` |
+| 12:19 | `edge-01 session dropped` | hosts row `connection reset 6m ago`, session 6 idle `6m` |
+| 12:14 | `db-01 pg_dump started` | session 2 `up 11m` |
+| 12:11 | `web-02 attached` | session 1 `up 14m`, terminal meta `up 14m` |
+| 12:10 | `staging-web-01 went offline` | hosts row `offline since 12:10` |
+
+### 2.4 Health
+
+Attention, four rows, dropped then offline then busy:
+
+```
+edge-01         dropped   connection reset 6m ago, 1 session waiting · scrollback preserved
+staging-web-01  offline   no answer on 127.0.0.20:2222 since 12:10 · no session was open
+build-01        cpu 94%   over 90% for 4m — cargo build in session 4 · expected during a build
+db-01           disk 81%  / has 71 GB free, filling ~4 GB/day · pg_dump writing to /backups
+```
+
+Each row names the cause when one is known, and says when the condition is
+expected. A busy host with a named cause is not an incident.
+
+Cards, one per attention row, in the same order. edge-01 and staging-web-01 are
+both stale cards and they are not the same stale:
+
+- edge-01 has a last reading. Dim card, `—` as the figure, the last values
+  behind it, dead sparkline, and `Connection reset 6m ago. Values are the last
+  reading, not live.` Hints `r reconnect · s silence 1h`.
+- staging-web-01 has no reading at all. Same dim card, `—` throughout, no
+  values behind it, and `Offline since 12:10. Never reached, nothing to show.`
+  Hints `r retry · s silence 1h`.
+
+Busiest right now, across all hosts:
+
+| host | process | cpu | rss |
 | --- | --- | --- | --- |
-| listening ports | 4 / 7 | 57% | orange |
-| /etc/nsswitch.conf | 6 / 7 | 86% | yellow |
-| /etc/ssh/sshd_config | 6 / 7 | 86% | yellow |
-| timezone | 6 / 7 | 86% | yellow |
-| *14 others* | 7 / 7 | 100% | green, no meter |
+| build-01 | rustc | 88.2 | 2.1 GB |
+| db-01 | postgres: pg_dump | 52.4 | 840 MB |
+| db-01 | postgres: writer | 7.1 | 210 MB |
+| monitor-01 | prometheus | 5.2 | 1.3 GB |
+| web-02 | nginx: master | 3.1 | 1.7 MB |
 
-Disagreements 3 + 1 + 1 + 1 = 6. Agreement **120 of 126 = 95.2%**.
+build-01's 88.2 sits under a host reading 94%, and db-01's 52.4 + 7.1 under 61%.
+Both leave room for the rest of the process table, which is the correct
+relation. A top-N list that sums to the headline is a lie about the tail.
 
-Headline: `95.2` `% agree`, `120 of 126 facet-checks`. Notes:
-`4 facets diverge across 5 hosts` and
-`1 host unprobed — facets unknown, not counted as agreement`.
+### 2.5 Terminal, on web-02
 
-### 2.2 Groups panel
+Scrollback ends mid-command, because session 1 is `deploy.sh` and the sessions
+table says so:
 
-Each row is computed inside its own peer set, which is why `role=web` reaches
-full consensus while its members diverge under `env=prod`. Say so in the
-panel's subtitle: `consensus is per tag, not fleet-wide`.
+```
+matt@web-02:~$ uptime; free -h | head -2
+ 12:11:02 up 12 days, 22:02,  1 user,  load average: 0.96, 1.02, 0.88
+               total   used   free  shared  buff/cache  available
+Mem:            62Gi   29Gi   14Gi    6.5Gi       20Gi        32Gi
+matt@web-02:~$ ./deploy.sh --release 2.14.4
+→ unpacking app-2.14.4.tar.gz
+→ running migrations … none pending
+→ reloading nginx
+nginx: reloading configuration…▊
+```
 
-| group | hosts | at consensus | note |
+Meta line: `web-02 · matt@127.0.0.12:2222 │ up 14m │ rtt 0.4ms`, right-aligned
+`1 of 2 forwards active` in `status_warn`. The handoff's `2 forwards` counts
+rules; the forwards panel says one of them failed to bind. Count what bound.
+
+Strip: cpu `12 %` `load 0.96 · 8 cores`; memory `30.6 GB / 66.7 · 46%`; net
+`↓ 8.4 M ↑ 1.2 M`; top by cpu with `nginx: worker ×6` collapsed.
+
+`free -h` reports GiB and the meter reports GB off a later sample. 62 GiB is
+66.7 GB and 29 GiB is 31.1 GB, so the two agree to their rounding and the spec
+does not require them to agree to the digit. It does require the meter's
+percentage to come from the same sample as its figures.
+
+### 2.6 Files and forwards
+
+Local `…/essh-demo/home/Downloads`, remote `web-02:/home/matt`.
+
+`app-2.14.4.tar.gz` is 38.8 MB locally and 20.2 MB remotely, because it is 52%
+uploaded. That row is marked in transfer, not as a collision: a partial upload
+of the file you are uploading is not a conflict. The collision demo is
+`deploy.sh`, 1.2 KB local and 46 B remote, yellow on both sides.
+
+Transfer: `52% · 3.1 MB/s · 6s`. 48% of 38.8 MB is 18.6 MB, and 18.6 / 3.1 is
+6.0. Always show rate and ETA, never a bare bar.
+
+Forwards on web-02, two rules, one bound:
+
+```
+L →  127.0.0.1:8080    localhost:80    ● failed  no listener on 8080 — bind refused, 2s ago · r retry
+L →  127.0.0.1:15432   db-01:5432      ● active  probed 2s ago · 1 open connection
+```
+
+State is the bind result, not an assumption. See §6.3.
+
+### 2.7 Command palette
+
+Population 28: attach one of 6 sessions, open a new session on one of 11 hosts,
+monitor one of 11 hosts. Query `db` matches 6.
+
+```
+❯ db                                                              6 of 28
+→ Attach session 2      db-01   pg_dump
+→ Attach session 3      db-01   -bash
++ New session           db-01
++ New session           db-02
+◔ Monitor               db-01   disk 81%
+◔ Monitor               db-02
+```
+
+Results are sessions and hosts, never settings.
+
+## 3. Cell budgets
+
+The handoff says the `ch` numbers are cell counts. They are, and at 150 columns
+several of them do not fit their content. Every grid below is arithmetic
+against a 150x34 terminal, which is the geometry the reference was authored at.
+
+Rows: 1 header, 1 footer, 32 for the body. Panel gaps are 1 blank row and 2
+blank columns, per the handoff's translation table.
+
+Inner width of a full-width panel is `150 - 2 border - 2 padding = 146`.
+A `14px` column is 1 cell. A `14px` gap is 2 cells.
+
+### 3.1 Sessions
+
+`3 1 15 9 11 8 7 Fill 9`, gaps 2, eight of them.
+
+```
+fixed 3+1+15+9+11+8+7+9 = 63   gaps 16   LAST LINE = 146 - 79 = 67
+```
+
+HOST is 15, not the handoff's 13: `staging-web-01` is 14 characters and the
+hosts table already budgets 15 for the same value. RUNNING at 11 fits
+`cargo build` exactly and ellipsises anything longer. LAST LINE at 67 is the
+column the screen exists for, so it takes the Fill.
+
+Selected row: `row_selected` background plus `▌` in the gutter, which is the
+dot column. No column shifts, because the marker replaces the dot rather than
+preceding it. The dot's colour moves onto the hostname for that row.
+
+The `#` column is an identifier, not a binding. It is the number
+`Ctrl+A <n>` jumps to inside a session. The panel subtitle says so:
+`6 open on 5 hosts · Ctrl+A 1-9 jumps`.
+
+Bottom row: three panels at `Fill Fill Fill`, gap 2, so 48 / 48 / 48, inner 44
+each. Quick connect's six rows fit in 8 lines with the border and the footnote.
+
+### 3.2 Hosts
+
+`1 15 14 6 12 13 13 6 12 Fill`, gaps 2, nine of them.
+
+```
+fixed 1+15+14+6+12+13+13+6+12 = 92   gaps 18   TAGS = 146 - 110 = 36
+```
+
+CPU 12, MEM 13, DISK 13 against the handoff's 8, 9, 9. Each is a `Fill 4`
+sub-grid with a 1-cell gap, so the meter gets 7, 8 and 8 cells. Three cells,
+which is what `8ch` yields, cannot express a ramp: it is on, half, or full.
+Eight cells is the btop idiom and the smallest width where the gradient reads.
+
+TAGS at 36 is generous for `prod web`. It absorbs the widening and stays Fill.
+
+Unreachable rows replace the five measurement columns with one explanation
+spanning CPU through RTT 60s:
+
+```
+12 + 13 + 13 + 6 + 12 + 4 gaps × 2 = 64 cells
+```
+
+The handoff's edge-01 string is 65 characters, one over. Do not hand-trim it.
+Build the reason from parts and drop them in a fixed order until it fits:
+
+1. `connection reset 6m ago` or `offline since 12:10`, never dropped
+2. ` · r reconnect` or ` · r retry`, never dropped
+3. ` · last seen cpu 9%, mem 41%`, dropped first
+4. ` · no response on 2222`, dropped second
+
+At 64 cells edge-01 keeps parts 1, 2 and 3 at 64 exactly after `last seen` is
+shortened to `last`. Below 64 it degrades to parts 1 and 2, which is the floor
+and always fits. Assert the floor, not the string:
+`an_unreachable_row_always_states_its_recovery_key`.
+
+### 3.3 Health
+
+Attention: `15 9 Fill`, gaps 2. `146 - 15 - 9 - 4 = 118` for the sentence.
+Host 15, not 12, for `staging-web-01`. Verdict 9 fits `disk 81%`.
+
+Cards: four at `Fill`, gaps 2, so 35 each, inner 31. Longest internals are
+`● staging-web-01 │ offline` at 26 and `up 12d · deploy.sh running` at 26.
+Below 4 cards' worth of width, drop to 2 columns and then 1, oldest attention
+last.
+
+Bottom row: two panels, `(146 - 2) / 2 = 72`, inner 68.
+
+- busiest `14 Fill 5 7`, gaps 2, three of them: PROCESS = 68 - 26 - 6 = 36.
+  RSS is 7, not 6: `16.8 MB` is 7 characters.
+- reachability `15 Fill 6`, gaps 4: the sparkline gets 43 cells. The handoff
+  says 20, which is the reference's pixel width, not a rule. 43 cells of a
+  10-minute buffer is one cell per 14 seconds and it is free, so take it.
+
+### 3.4 Files and forwards
+
+Forwards `4 22 20 12 Fill`, gaps 2, four of them: LAST CHECK = 146 - 58 - 8 =
+80. The failed row's reason is 51.
+
+The add-forward row sits outside the table, on its own line, and carries only
+the form that works:
+
+```
+a  add forward   L 127.0.0.1:PORT → HOST:PORT
+```
+
+`R` is accepted and refused with a reason until §6.4 lands. Advertising a
+binding that reports failure is better than advertising one that lies, and both
+are worse than not advertising it.
+
+### 3.5 Help
+
+`2fr 1fr`, gap 2: keys 96, config 48.
+
+Keys inner 92, two labelled columns at 45 with a 2 gap, each `11 Fill`, so the
+description gets 32. The longest is `quit (sessions keep running)` at 28, and
+`terminal + monitor split` at 24. The handoff's `1.25fr 1fr` gives 24, which
+clips the first of those. That is defect 4 of the original seven rebuilt at a
+different width, which is why the budget is written down here.
+
+`Ctrl+A ←/→` is 11 characters and sets the key column.
+
+Config inner 44, `8 Fill`, so 34. Entries are two lines when the value is
+longer: `config.toml` then a dim `11 hosts · edited 4h ago`.
+
+Function keys: six, in three columns of 30 inside the keys panel.
+
+### 3.6 Floors
+
+Below these, one line: `essh needs 60x16 · this window is 48x12`. Never a
+partial panel.
+
+| Screen | Drop first | Then | Floor |
 | --- | --- | --- | --- |
-| env=prod | 8 | 2 / 7 | edge-01 breaks timezone + sshd_config, and 4 other hosts |
-| region=us-east | 7 | 1 / 5 | edge-01 breaks timezone + sshd_config, and 3 other hosts |
-| region=us-west | 3 | 2 / 3 | cache-01 breaks listening ports |
-| role=web | 4 | 2 / 2 | full consensus · 2 unprobed, excluded |
-| role=db | 2 | — | no majority — 2 hosts hold 2 distinct values |
+| sessions | bottom row of three panels | UP, CPU, IDLE | 60x16, `#` host state last line |
+| hosts | TAGS, RTT 60s | MEM, DISK meters to bare percentages | 60x16, dot name address cpu |
+| health | reachability panel, then busiest | cards to 1 column | 60x16, attention list alone |
+| terminal | strip | meta line to host only | 60x16, scrollback |
+| files | transfer panel | remote pane, tab between | 60x16, one pane |
+| help | keys grid to 1 column | config panel | 40x10, scrolls |
 
-The ratio appears **once per row**, in the AT CONSENSUS column. The note says
-what the ratio cannot.
+`render_smoke::every_view_renders_at_every_size_without_panicking` already
+covers the panic case. These are the legibility rules on top of it.
 
-### 2.3 No majority
+## 4. Keys
 
-A group needs a strict plurality before any host in it can be called wrong.
-Two hosts holding two values is a disagreement with no consensus: show `—` in
-the ratio column, `no majority — N hosts hold M distinct values` in the note,
-and flag neither host as the outlier. A group with fewer than two probed hosts
-shows `1 host probed — nothing to compare it against`.
+The handoff double-books digits three ways and the footer twice. Both need
+resolving before any of it is built, because a key map is not something you
+discover during review.
 
-Implemented in `divergence::score_categorical` and `GroupSummary::has_majority`.
+### 4.1 Digits
 
-### 2.4 Verdict and outliers
+On the sessions screen the handoff wants `1` to switch to the sessions tab
+(header), jump to session 1 (the `#` column), and open a session on web-01
+(quick connect). Resolution:
 
-Both scoped to `env=prod`, and both say so.
+- `1`-`4` switch dashboard tabs, everywhere on the dashboard. This is what the
+  header numbers mean, what the help screen teaches, and what already ships.
+- The sessions `#` column is an identifier for `Ctrl+A <n>`, which only exists
+  inside a session. §3.1 says so in the panel subtitle. It is not a dashboard
+  binding.
+- Quick connect keeps its numbers, but they only fire while the panel holds
+  focus. `Tab` and `Shift+Tab` cycle panel focus within a screen, the focused
+  panel takes `border_focus`, and the footnote reads
+  `Tab here, then press the number.`
 
-Verdict lead: `5 of the 7 comparable hosts hold every outlier · 1 unprobed, excluded`.
-Five entries: edge-01, web-02, web-03, db-02, cache-01.
+The focus ring is already in the design language, the design already tokens it,
+and it is the only resolution that keeps all three affordances. The cost is one
+extra keystroke on quick connect, which is the least valuable of the three.
 
-Outliers: **5 rows** by divergence — edge-01 Δ2, then web-02, web-03, db-02,
-cache-01 at Δ1. Summary: `2 hosts at full consensus · 1 unprobed, excluded`
-(5 + 2 + 1 = 8, the group's size).
+### 4.2 The footer
 
-### 2.5 Monitor, on web-02
+The handoff's footer is identical on all six screens and advertises
+`d detach · m monitor`. On the files screen `d` is download and `m` is mkdir.
 
-CPU `11.5%` of 8 cores, so `load 0.92 0.81 0.74`. `peers 15%` is the fleet
-median (§5.2).
+The footer is per screen. It carries the current screen's bindings, then a
+stable tail that is bound everywhere: `F1 help · ^P menu · q quit`, and
+right-aligned `theme dark · 150×34`. `no_advertised_command_does_nothing`
+already fails the build when a footer advertises a key the screen ignores, so
+this is enforced rather than remembered.
 
-Memory `30.5 GB / 66.7 GB` = **46%**.
+### 4.3 Shift pairs
 
-Net `↓ 8.3 MB/s` `↑ 1.2 MB/s`, and the flow table sums to it:
+A shift pair is allowed only when the two actions are the same verb at
+different scope. v2 keeps `Ctrl+A M` split and `Ctrl+A m` full screen, which
+qualifies: same verb, two layouts. `d` delete and `D` divergence did not, and
+divergence leaves the dashboard anyway (§8).
 
-| peer | proc | ↓ | ↑ |
-| --- | --- | --- | --- |
-| 10.0.2.14:5432 | postgres | 5.9M | 412k |
-| 10.0.2.9:6379 | redis-cli | 1.4M | 206k |
-| 10.0.3.2:443 | nginx | 802k | 540k |
-| 127.0.0.1:2222 | sshd: matt | 218k | 61k |
-| 10.0.0.1:53 | systemd-resolve | 12k | 3k |
+`r` is uniformly reconnect or retry: on a dropped session, an offline host row,
+a stale card, and a failed forward. It is never probe and never reload.
 
-15 processes, 6 nginx workers collapsed to one `×6` row → 10 rows displayed.
+### 4.4 The map
 
-Transfer: `app-2.14.4.tar.gz`, 38.8 MB, `52% · 3.1 MB/s · 6s`.
+```
+DASHBOARD                          IN A SESSION
+1-4     switch tab                 Ctrl+A 1-9  jump to session N
+j k ↑ ↓ navigate list              Ctrl+A ←/→  previous / next
+Tab     next panel                 Ctrl+A Tab  last session
+Enter   connect / attach           Ctrl+A M    terminal + monitor split
+n       new session here           Ctrl+A m    full-screen monitor
+d       detach session             Ctrl+A f    file browser
+r       reconnect / retry host     Ctrl+A p    port forwards
+m       monitor selected host      Ctrl+A b    broadcast to a tag
+a       add host                   Ctrl+A d    detach, keep it running
+e       edit host                  Ctrl+A w    close session
+/       search hosts
+Ctrl+P  command menu
+q       quit (sessions keep running)
 
-## 3. Panels
+F1 help   F2 monitor   F3 files   F4 forwards   F5 mini strip   F9 new session
+```
+
+`q quit (sessions keep running)` states the persistence guarantee where the
+anxiety is. It appears in three places: this map, the sessions panel subtitle,
+and the config panel.
+
+## 5. Colour
+
+### 5.1 Slots
+
+`theme::Theme` is the contract. Nine themes fill the same named slots and
+`theme::tests::no_screen_paints_from_a_hardcoded_colour` fails the build when a
+screen bypasses them. Map the reference's tokens onto slots rather than pasting
+hex.
+
+| Reference token | Slot |
+| --- | --- |
+| ground, window, panel | `bg` |
+| border-strong | `border` |
+| border-focus | `border_focus` *(new)* |
+| rule | `separator` |
+| text | `text_primary` |
+| text-mid | `text_secondary` |
+| text-dim, text-dimmer | `text_muted` |
+| text-strong | `text_emphasis` |
+| cyan (chrome) | `brand`, `key_hint` |
+| green (ok) | `status_good`, quiet variant `muted_good` |
+| yellow (busy) | `status_warn` |
+| red (bad) | `status_error` |
+| blue (memory) | `status_info` |
+| magenta (net down) | `rx_rate` |
+| grey (offline) | `absent` |
+| panel-alt | `panel_alt` *(new)* |
+| terminal | `terminal_bg` *(new)* |
+| footer | `footer_bg` *(new)* |
+| meter-track | `meter_track` *(new)* |
+
+Five new slots, filled in all nine palettes. v1's spec asked for six because it
+split `status_warn` into warn and worst for the divergence ramp. v2 has no
+divergence, so `status_warn` stays whole and `border_focus` takes the sixth
+place: §4.1 makes panel focus load-bearing, and it cannot be drawn from
+`border`.
+
+Cyan is chrome. Panel numbers, keys, focus, the caret. It never encodes a
+measurement.
+
+### 5.2 Six backgrounds do not survive
+
+The handoff's tokens include ground `#07090b`, window `#0a0d10`, panel
+`#0c1014`, panel-alt `#0e1216`, terminal `#080b0e` and footer `#0b0f13`. Those
+are six values inside a 7-point luminance range. On a terminal they are
+indistinguishable at normal brightness, and under `terminal` they cannot be
+expressed at all, because that theme pins no RGB by design.
+
+Collapse to three: `bg` for ground, window and panel; `panel_alt` for the title
+strip and the palette card; `terminal_bg` for scrollback and command input.
+`footer_bg` is `panel_alt`. The separation the reference gets from luminance
+comes from the border and the rule in a TUI, which is how btop does it too.
+
+### 5.3 Meters
+
+`design::meter_ramped(fraction, width, ramp)` draws a run of `█` coloured by
+**position along the scale**, not by value, with `meter_track` behind the empty
+cells. That is the btop device the reference is imitating, and colouring by
+value instead makes a 40% meter and a 95% meter the same colour at their left
+edge.
+
+CPU uses the utilisation ramp, green to yellow at 60% to red. MEM is flat
+`status_info`. DISK is flat `muted_good` switching to `status_warn` past 80%.
+The number beside the meter takes the severity colour; the meter does not
+change colour to match.
+
+Under `Theme::defers_to_terminal()` the ramps switch off, because a five-stop
+gradient has no 16-colour form. Meters keep `█` fill and `░` track in one
+themed colour: `status_good` under 60%, `status_warn` to 85%, `status_error`
+above. Braille sparklines are unaffected, being glyphs rather than colour.
+
+The light theme needs the four severity hues darkened for contrast on a light
+ground.
+
+## 6. Data the app does not have
+
+Three of the six screens need collection that does not exist. The handoff
+presents all of it as layout, which understates v2 by a wide margin. Nothing
+that renders a number ships before the data behind it exists.
+
+### 6.1 Fleet metrics, the long pole
+
+The hosts screen's CPU, MEM, DISK and the health screen's cards, attention
+rules and busiest-process list all need per-host metrics for **every** host,
+including the ten with no session open.
+
+What exists today:
+
+- `fleet::FleetProber` does a TCP connect every 60s. It yields reachable, an
+  RTT and the sparkline history. Nothing else.
+- `monitor::HostMetricsCollector::collect` needs an established
+  `russh::client::Handle`, which only exists for a host you have a session on.
+- `divergence::collect` has the same constraint, which is why the v0.3.3
+  screenshots show facets for nine hosts: nine sessions were open.
+
+So v2's primary screen is built on a sampler that does not exist. It needs:
+
+1. A pool of SSH connections to configured hosts, opened lazily and kept warm,
+   or a connect-run-close per poll. Warm connections cost 11 idle channels and
+   file descriptors; connect-per-poll costs a full handshake every 5 seconds
+   per host. Measure both against the fixture fleet before choosing. A
+   handshake to a container on loopback is not a handshake to a host three
+   network hops away, so measure with added latency.
+2. One command per sample, not five. `monitor::platform` already builds a
+   combined command with section sentinels for the attached host. Reuse it.
+3. A concurrency limit and a jitter. Eleven hosts is nothing; a real fleet is
+   200, and 200 simultaneous handshakes every 5 seconds is a denial of service
+   you wrote yourself.
+4. Failure that degrades to the state model in §1 rather than to zeroes. A host
+   that answers TCP but refuses the exec is reachable with no metrics, which is
+   a fourth thing the table has to say.
+5. A back-off. A host that has failed its last three samples moves to the 60s
+   probe cycle until it answers.
+
+The poll interval is 5s per the handoff. That is a reasonable default for a
+dashboard and an unreasonable one for 200 hosts, so it is configurable and the
+config panel already shows it.
+
+Until this lands, the hosts screen shows the columns it can fill and says why
+the others are blank. It does not show zeroes.
+
+### 6.2 Session detail
+
+The sessions table's RUNNING, CPU and LAST LINE columns are also new.
+
+- **LAST LINE** is the last non-empty line of the session's scrollback. Sessions
+  already keep a `vt100` parser, so this is a read, not a collection. It is the
+  column that makes the screen worth having, and it is the cheapest of the
+  three.
+- **RUNNING** is the foreground process of the session's TTY. One `ps` per
+  session per poll, or read it from the pty's foreground process group where
+  the platform allows.
+- **CPU** is the session's process tree, summed. Same `ps`, one more column.
+
+A dropped session has no live values. It keeps its last line, because the
+scrollback survived, and shows `—` for the rest.
+
+### 6.3 Forward state, settled
+
+Verification turned out to be the wrong frame for local forwards. We own the
+listener, so the bind result is the state. `portfwd::bind_forward` returns the
+`io::Error`, and the row shows `● active`, `● starting` or `● failed` with the
+reason. Active carries a connection count from a real counter. Shipped in
+phase 0.
+
+### 6.4 Remote forwards, still not implemented
+
+Two prerequisites in `ssh/mod.rs`:
+
+1. `SshSession.handle` is `Arc<Handle<_>>` and `tcpip_forward` needs `&mut`.
+   Either move to `Arc<Mutex<Handle>>` or hold a dedicated forwarding handle.
+   The metrics sampler and the shell channel share this handle, so measure the
+   contention before choosing.
+2. `server_channel_open_forwarded_tcpip` accepts the channel and drops it. It
+   has to route to the registered forward and proxy to the local target.
+
+Until then `R` is refused with a reason, which is the honest state, and §3.4
+keeps it off the add-forward row.
+
+### 6.5 Broadcast
+
+`essh run <tag> -- <cmd>` already fans out over one-shot connections and prints
+per-host output. The broadcast panel needs the same fan-out reporting exit code
+and duration per host into the UI instead of stdout, without blocking the
+frame. The CLI path is the model; the streaming is new.
+
+### 6.6 Activity
+
+The activity panel needs an event log, which does not exist. Entries come from
+state transitions the app already computes: a session's state changing, a host
+crossing or clearing a threshold, a host changing reachability. Ring buffer,
+capped at the panel's height times four, timestamps from one clock so §2.3
+holds.
+
+## 7. Panels
 
 Use `design::panel::pane` with `PanelOpts`. It is netwatch's idiom, already
-ported, and it carries everything the reference draws on the border:
+ported, and it carries everything the reference draws on the border.
 
 ```
-╭─┤1├─┤ hosts ├─┤ 10 hosts · 60s rtt ├──────────────┤ sort diverge ↓ ├─╮
-│                                                                      │
-╰─┤ ↑↓ select  ⏎ connect  D divergence  p probe ├──────────────────────╯
+╭─┤1├─┤ hosts ├─┤ 11 hosts · refreshed 4s ago ├────────────┤ sort load ↓ ├─╮
+│                                                                          │
+╰─┤ ↑↓ select  ⏎ connect  m monitor  a add  e edit  / search ├─────────────╯
 ```
 
-| PanelOpts field | Reference element |
+| `PanelOpts` field | Reference element |
 | --- | --- |
 | `key` | the panel number |
 | `title` | the panel name |
 | `sub` | the dim qualifier after it |
 | `right` | the top-right slot |
 | `foot_left` | bottom-edge key hints |
-| `foot_right` | paging / range |
+| `foot_right` | paging or range |
 
 Do not call `Block::bordered()` for a screen panel. Two panel idioms in one
 binary is the thing the port was done to end.
 
-## 4. Colour
+Panel numbers are decoration on every screen. They are not bindings, because
+§4.1 gives digits to the tabs. They stay because they are the btop idiom the
+design is built on and because they give the key hints something to refer to.
 
-`theme::Theme` is the contract: nine themes fill the same named slots, and
-`theme::tests::no_screen_paints_from_a_hardcoded_colour` enforces it. Map the
-reference's tokens onto slots rather than pasting hex.
+## 8. What v2 drops, and what that costs
 
-| Reference token | Slot |
-| --- | --- |
-| ground / window / panel | `bg` |
-| border-strong | `border` |
-| rule | `separator` |
-| text | `text_primary` |
-| text-mid | `text_secondary` |
-| text-dim / dimmer | `text_muted` |
-| text-strong | `text_emphasis` |
-| cyan (chrome) | `brand`, `key_hint` |
-| green (ok) | `status_good`, quiet variant `muted_good` |
-| red (failed) | `status_error` |
-| blue (memory) | `status_info` |
-| magenta (net down) | `rx_rate` |
-| grey (never probed) | `absent` |
+Gone from the product surface: fleet consensus scoring, the `DIVERGE` column,
+tag and group agreement bars, per-facet percentages, host verdicts with config
+hashes, and the `p` / `P` / `R` probe-versus-reload split.
 
-Six slots the redesign needs and the struct does not have. Add them, and fill
-them in all nine palettes:
+The engine is not gone. `divergence::` collects facts, scores categorical
+agreement, refuses to name a consensus on a tie, and has 100-odd tests. Deleting
+it to satisfy a screen redesign would be the expensive kind of tidy. It moves
+behind explicit commands:
 
-- `severity_warn` — one divergence (yellow) — and `severity_worst` — the worst
-  offender (orange). Today both collapse into `status_warn`, so the hosts table
-  cannot distinguish "1 facet" from "the host that breaks the fleet".
-- `panel_alt` — title bar and palette card.
-- `terminal_bg` — the scrollback pane, darker than the panel.
-- `footer_bg` — the footer bar.
-- `meter_track` — empty meter cells.
+- `essh diff <tag>` compares a peer set and prints the facet table.
+- `essh why <host>` explains one host's divergence. Already shipped.
 
-Cyan is chrome: panel numbers, keys, focus, the caret. It never encodes a
-value.
+Both require sessions or one-shot connections to the peer set, which is the
+same fan-out §6.1 needs. Build it once.
 
-## 5. Data the app does not have yet
+This costs the drill-down. v1 bound `D` on two screens to a divergence modal.
+v2 has no `D` and no modal, so a user who wants to know why two hosts behave
+differently leaves the TUI. That is the deliberate trade: the handoff says the
+audience found the consensus screens too advanced, and a CLI command they never
+run is better than a dashboard column they misread.
 
-Three of the six screens need collection that does not exist. The original
-listed these beside items already implemented, which understates them by a
-large margin.
+Still out of scope, unchanged: the launcher, add-host and edit-host forms, the
+search overlay, and the full-screen monitor for one host.
 
-### 5.1 Per-flow network — new collection path
+## 9. Verification
 
-`monitor::platform` collects one aggregate counter pair per host
-(`/proc/net/dev`, `netstat -ib`). There is no socket table and no PID
-attribution. The `net · per-flow` panel needs, per sample:
+The demo and `tests/demo_verify.rs` drive the same binary through the same keys
+against the same fleet. The GIF is what a person looks at. The test is what
+verifies it, because a screen is text before it is pixels and "a count agrees
+with its noun" is an assertion rather than an impression.
 
-- `ss -tunp` (Linux) / `netstat -anv` (macOS) for the socket table,
-- two samples ~1s apart for byte deltas per socket,
-- `/proc/net/tcp` inode → `/proc/*/fd` for process attribution — **root for
-  sockets owned by other users**.
+`scripts/spec-demo.sh` refuses to publish a GIF whose beats do not hold.
 
-Rules this imposes on the design, which the reference has no state for:
+Rules asserted on every frame, not only the frame that shows them:
 
-- Without root, show flows for the session user's own processes and label the
-  panel `own processes · run as root for all flows`. Do not silently show a
-  partial list as if it were complete.
-- If the socket table is unavailable, the panel keeps its aggregate ↓/↑ figures
-  and histories, and the flow table shows `per-flow needs ss(8) on the host`.
+1. No count disagrees with its noun.
+2. No binding is split across rows by wrapping.
+3. The header's four state counts sum to the host count (§1).
+4. No footer advertises a key the screen ignores.
+5. `r` is never advertised as probe or reload.
+6. An unreachable row states its recovery key, whatever the width.
+7. No stale figure appears in a live column. A dropped host's last reading is
+   labelled or it is `—`.
 
-### 5.2 `peers` median CPU — new sampler
+Per beat, the specific claims of §2. Fixture literals are asserted as
+relations, not values, because the demo fleet is eleven real containers and
+their CPU is whatever they are doing:
 
-`peers 15%` is the fleet median. Metrics are collected only for the host you
-are attached to. This needs a background sampler across probed hosts on the
-probe cycle. Until it exists the slot reads `peers —`, not a number.
+- `load ≈ cpu% × cores`, within the sampling window.
+- A session's CPU is at most its host's CPU.
+- Sessions per host sum to the header's session count.
+- Quick connect lists exactly the hosts with no session.
+- The attention list equals `busy + dropped + offline` from the header.
+- The transfer's ETA equals remaining bytes over the reported rate.
 
-### 5.3 Forward state — done, and the shape it settled into
-
-Verification turned out to be the wrong frame for local forwards: we own the
-listener, so the bind result *is* the state. `portfwd::bind_forward` returns
-the `io::Error`, and the row shows `● active`, `● starting` or `● failed` with
-the reason. `Active` carries a connection count from a real counter.
-
-Remote (`R`) forwards are refused at the point of request rather than listed.
-See §9.
-
-## 6. Degradation
-
-### 6.1 Minimum size
-
-The reference is authored at 150×34. Below that, drop in this order and keep
-the rest aligned:
-
-| Screen | Drop first | Then | Floor |
-| --- | --- | --- | --- |
-| hosts | TAGS, SEEN | RTT sparkline, USER | 60×16 — status, name, address, diverge |
-| fleet | facet grid to 2 columns, then 1 | outliers panel | 60×16 — headline + verdict |
-| monitor | per-core grid to 1 column | flow table, process RSS | 60×20 — four figures + histories |
-| files | transfer panel | remote pane (tab between) | 60×16 — one pane |
-| help | grid to 2 columns, then 1 | — | 40×10 — scrolls |
-
-Below the floor, one line: `essh needs 60×16 · this window is 48×12`. Never
-draw a partial panel.
-
-`render_smoke::every_view_renders_at_every_size_without_panicking` already
-covers the panic case; these are the legibility rules on top of it.
-
-### 6.2 Cells, not pixels
-
-`ch` values are cell counts. Meter widths are given in cells here, so the
-reference's `÷5` guess is not needed: agreement meter 20, facet meter 15,
-transfer meter 48, per-core meter 8, memory bars 20.
-
-Bar *heights* (9px, 11px), radii, shadows, `line-height` and `letter-spacing`
-have no cell equivalent. Drop them. Do not spell `E S S H` to simulate
-letter-spacing: it costs columns and breaks header alignment.
-
-Type sizes become weight and colour: 34px → bold + `text_emphasis`; 26px →
-bold; 20px → bold; 11.5px hints → `text_muted`.
-
-### 6.3 The `terminal` theme
-
-`Theme::defers_to_terminal()` switches the gradient ramps off so the ANSI-only
-theme leaks no 24-bit colour. Gradient cell meters are the redesign's main
-quantitative device, so they need a 16-colour form:
-
-- Meters keep `█` fill and `░` track, in one themed colour: `status_good` under
-  60%, `status_warn` to 85%, `status_error` above.
-- Severity uses the four ANSI slots the theme already pins; yellow and orange
-  collapse to one.
-- Braille sparklines are unaffected — glyphs, not colour.
-
-The light theme needs severity hues darkened for contrast on a light ground.
-
-## 7. Keys
-
-The redesign adds `p`/`P` and `R` on top of an existing `d`/`D`. Three
-shift-pairs, when the defect being fixed was a shiftless-key mixup. Rules:
-
-- A shift-pair is allowed only when the two actions are the same verb at
-  different scope (`p` host / `P` fleet). `d` delete and `D` divergence are not,
-  and `d` keeps its two-press confirm.
-- `r` is unbound for one release and reports the split rather than acting.
-- Every binding a footer advertises must be handled on that screen —
-  `no_advertised_command_does_nothing` enforces it.
-
-## 8. The seven defects
-
-Six from the original handoff, plus the one it dropped. All seven are fixed;
-see `PLAN.md` §0 for the commits and the tests that pin them.
-
-1. `role=web` printed its consensus ratio twice.
-2. Forwards reported `Active` with nothing bound.
-3. `r` was advertised as probe and performed a reload that discarded probe state.
-4. The add-forward format hint was clipped at the panel edge.
-5. Help wrapped mid-phrase: `F4 / forwards`, `F9 new / session`.
-6. `1 peers never probed`.
-7. **A session opened with Enter from the dashboard stayed on "Connecting"
-   indefinitely with a blank pane and never collected facets**, while sessions
-   opened with F9 connected in about a second. Reported in
-   `reference/original-screenshots-README.txt`, absent from the handoff's list.
-   It is the only functional defect of the seven, and the hosts screen keeps
-   `⏎ connect` as its primary action.
-
-## 9. Out of scope, and what that costs
-
-Unchanged from the original: the launcher, the sessions list, the divergence
-modal, the CLI, and the seven theme variants.
-
-Two seams the original does not mention:
-
-- **The divergence modal is the drill-down.** Both hosts and fleet bind `D`,
-  and the verdict panel advertises `D facet detail`. The redesign's primary
-  drill-down lands on an un-redesigned screen. Either bring it in or accept
-  that the flow is half-redesigned; do not discover this during review.
-- **Remote port forwards are not implemented.** `tcpip_forward` needs `&mut` on
-  the russh handle, which sessions hold behind an `Arc`, and incoming channels
-  land in `server_channel_open_forwarded_tcpip`, which drops them. Both are
-  fixable; until then `R` specs are refused with a stated reason. The forwards
-  panel is therefore local-only, and its title says so.
+The fixture fleet is eleven Debian containers on `127.0.0.11`-`.21:2222`.
+staging-web-01 is stopped, not staged: the offline state in the demo is a
+container that is actually down. edge-01's session is dropped by stopping its
+container after the session opens, so the scrollback-survives claim is tested
+rather than drawn.

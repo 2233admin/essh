@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" />
+<style>
+  html,body{margin:0;padding:0;background:#07090b;}
+  *{box-sizing:border-box;}
+  a{color:#58d6d0;text-decoration:none;}
+  a:hover{color:#8fe9e4;}
+</style>
+</helmet>
+<div style="font-family:'JetBrains Mono',ui-monospace,monospace;background:#07090b;padding:28px;min-height:100vh;display:flex;flex-direction:column;align-items:center;gap:18px">
+
+  <div style="width:1420px;display:flex;align-items:center;gap:10px;color:#47555f;font-size:11px;letter-spacing:.14em;text-transform:uppercase">
+    <span>essh 0.4 — simplified</span>
+    <span style="flex:1;height:1px;background:#1a2129"></span>
+    <span onClick="{{ prev }}" style="cursor:pointer;color:#6b7c8a" style-hover="color:#58d6d0">◀</span>
+    <span style="color:#6b7c8a">{{ screenLabel }}</span>
+    <span onClick="{{ next }}" style="cursor:pointer;color:#6b7c8a" style-hover="color:#58d6d0">▶</span>
+  </div>
+
+  <div style="width:1420px;display:flex;gap:6px;flex-wrap:wrap;font-size:12px">
+    <span onClick="{{ goSessions }}" style="padding:5px 12px;border:1px solid #232c34;border-radius:4px;color:#8b9aa6;cursor:pointer;background:#0e1216" style-hover="borderColor:#3a4a56;color:#cbd5dd">1 sessions</span>
+    <span onClick="{{ goHosts }}" style="padding:5px 12px;border:1px solid #232c34;border-radius:4px;color:#8b9aa6;cursor:pointer;background:#0e1216" style-hover="borderColor:#3a4a56;color:#cbd5dd">2 hosts</span>
+    <span onClick="{{ goHealth }}" style="padding:5px 12px;border:1px solid #232c34;border-radius:4px;color:#8b9aa6;cursor:pointer;background:#0e1216" style-hover="borderColor:#3a4a56;color:#cbd5dd">3 health</span>
+    <span onClick="{{ goTerminal }}" style="padding:5px 12px;border:1px solid #232c34;border-radius:4px;color:#8b9aa6;cursor:pointer;background:#0e1216" style-hover="borderColor:#3a4a56;color:#cbd5dd">4 terminal + strip</span>
+    <span onClick="{{ goFiles }}" style="padding:5px 12px;border:1px solid #232c34;border-radius:4px;color:#8b9aa6;cursor:pointer;background:#0e1216" style-hover="borderColor:#3a4a56;color:#cbd5dd">5 files + forwards</span>
+    <span onClick="{{ goHelp }}" style="padding:5px 12px;border:1px solid #232c34;border-radius:4px;color:#8b9aa6;cursor:pointer;background:#0e1216" style-hover="borderColor:#3a4a56;color:#cbd5dd">6 help</span>
+  </div>
+
+  <div style="width:1420px;border:1px solid #232c34;border-radius:10px;overflow:hidden;background:#0a0d10;box-shadow:0 30px 80px -30px #000">
+
+    <div style="display:flex;align-items:center;gap:8px;padding:9px 14px;background:#0e1216;border-bottom:1px solid #1a2129">
+      <span style="width:11px;height:11px;border-radius:50%;background:#3a4249"></span>
+      <span style="width:11px;height:11px;border-radius:50%;background:#3a4249"></span>
+      <span style="width:11px;height:11px;border-radius:50%;background:#3a4249"></span>
+      <span style="flex:1;text-align:center;color:#5b6b7a;font-size:12px">essh — {{ screenLabel }}</span>
+      <span style="width:60px"></span>
+    </div>
+
+    <!-- ── global header ── -->
+    <div style="display:flex;align-items:stretch;padding:10px 16px 0;font-size:13px">
+      <div style="display:flex;align-items:baseline;gap:14px;flex:1">
+        <span style="color:#58d6d0;font-weight:700;letter-spacing:.14em">ESSH</span>
+        <span data-screen-label="tabs" style="display:flex;gap:2px">
+          <sc-if value="{{ tabSessions }}" hint-placeholder-val="{{ true }}"><span onClick="{{ goSessions }}" style="padding:3px 10px;border-radius:3px 3px 0 0;color:#cbd5dd;background:#131a20;border-bottom:2px solid #58d6d0;cursor:pointer">1 sessions</span></sc-if>
+          <sc-if value="{{ offSessions }}"><span onClick="{{ goSessions }}" style="padding:3px 10px;border-radius:3px 3px 0 0;color:#6b7c8a;cursor:pointer" style-hover="color:#cbd5dd">1 sessions</span></sc-if>
+          <sc-if value="{{ tabHosts }}" hint-placeholder-val="{{ true }}"><span onClick="{{ goHosts }}" style="padding:3px 10px;border-radius:3px 3px 0 0;color:#cbd5dd;background:#131a20;border-bottom:2px solid #58d6d0;cursor:pointer">2 hosts</span></sc-if>
+          <sc-if value="{{ offHosts }}"><span onClick="{{ goHosts }}" style="padding:3px 10px;border-radius:3px 3px 0 0;color:#6b7c8a;cursor:pointer" style-hover="color:#cbd5dd">2 hosts</span></sc-if>
+          <sc-if value="{{ tabHealth }}" hint-placeholder-val="{{ true }}"><span onClick="{{ goHealth }}" style="padding:3px 10px;border-radius:3px 3px 0 0;color:#cbd5dd;background:#131a20;border-bottom:2px solid #58d6d0;cursor:pointer">3 health</span></sc-if>
+          <sc-if value="{{ offHealth }}"><span onClick="{{ goHealth }}" style="padding:3px 10px;border-radius:3px 3px 0 0;color:#6b7c8a;cursor:pointer" style-hover="color:#cbd5dd">3 health</span></sc-if>
+          <sc-if value="{{ tabConfig }}" hint-placeholder-val="{{ true }}"><span onClick="{{ goHelp }}" style="padding:3px 10px;border-radius:3px 3px 0 0;color:#cbd5dd;background:#131a20;border-bottom:2px solid #58d6d0;cursor:pointer">4 config</span></sc-if>
+          <sc-if value="{{ offConfig }}"><span onClick="{{ goHelp }}" style="padding:3px 10px;border-radius:3px 3px 0 0;color:#6b7c8a;cursor:pointer" style-hover="color:#cbd5dd">4 config</span></sc-if>
+        </span>
+      </div>
+      <div style="display:flex;align-items:center;gap:16px;font-size:12px">
+        <span style="display:flex;align-items:center;gap:7px"><span style="width:7px;height:7px;border-radius:50%;background:#35d07f"></span><span style="color:#8b9aa6">9 up</span></span>
+        <span style="display:flex;align-items:center;gap:7px"><span style="width:7px;height:7px;border-radius:50%;background:#e3bf4d"></span><span style="color:#8b9aa6">1 busy</span></span>
+        <span style="display:flex;align-items:center;gap:7px"><span style="width:7px;height:7px;border-radius:50%;background:#47555f"></span><span style="color:#8b9aa6">1 offline</span></span>
+        <span style="color:#3a4750">│</span>
+        <span style="color:#8b9aa6">6 sessions</span>
+        <span style="color:#5b6b7a">12:25:34</span>
+      </div>
+    </div>
+
+    <!-- ══════════════════════ 1 · SESSIONS ══════════════════════ -->
+    <sc-if value="{{ isSessions }}" hint-placeholder-val="{{ true }}">
+    <div style="padding:20px 16px 8px;display:flex;flex-direction:column;gap:24px">
+
+      <div style="position:relative;border:1px solid #2a3540;border-radius:6px;background:#0c1014;padding:16px 14px 12px">
+        <div style="position:absolute;top:-9px;left:16px;display:flex;align-items:center;gap:8px;background:#0a0d10;padding:0 9px;font-size:12px">
+          <span style="color:#58d6d0;font-weight:700">1</span><span style="color:#cbd5dd;letter-spacing:.1em">sessions</span>
+          <span style="color:#3a4750">│</span><span style="color:#5b6b7a">6 open on 5 hosts</span>
+        </div>
+        <div style="position:absolute;top:-9px;right:16px;background:#0a0d10;padding:0 9px;font-size:12px;color:#5b6b7a">detached survive <span style="color:#8b9aa6">restarts</span></div>
+
+        <div style="display:grid;grid-template-columns:3ch 14px 13ch 9ch 11ch 8ch 7ch 1fr 9ch;gap:0 14px;font-size:12.5px;align-items:center;white-space:nowrap">
+          <div style="color:#5b6b7a;text-align:right">#</div>
+          <div></div>
+          <div style="color:#5b6b7a;letter-spacing:.1em">HOST</div>
+          <div style="color:#5b6b7a;letter-spacing:.1em">STATE</div>
+          <div style="color:#5b6b7a;letter-spacing:.1em">RUNNING</div>
+          <div style="color:#5b6b7a;letter-spacing:.1em;text-align:right">UP</div>
+          <div style="color:#5b6b7a;letter-spacing:.1em;text-align:right">CPU</div>
+          <div style="color:#5b6b7a;letter-spacing:.1em">LAST LINE</div>
+          <div style="color:#5b6b7a;letter-spacing:.1em;text-align:right">IDLE</div>
+
+          <div style="grid-column:1/-1;height:1px;background:#1a2129;margin:8px 0 4px"></div>
+
+          <div style="grid-column:1/-1;display:grid;grid-template-columns:3ch 14px 13ch 9ch 11ch 8ch 7ch 1fr 9ch;gap:0 14px;align-items:center;background:#16212a;box-shadow:inset 2px 0 0 #58d6d0;border-radius:2px;margin:1px -8px;padding:3px 8px">
+            <div style="color:#58d6d0;text-align:right;font-weight:700">1</div>
+            <div style="color:#35d07f;font-size:11px">●</div>
+            <div style="color:#fff;font-weight:500">web-02</div>
+            <div style="color:#35d07f">attached</div>
+            <div style="color:#cbd5dd">deploy.sh</div>
+            <div style="color:#8b9aa6;text-align:right">8m</div>
+            <div style="color:#8b9aa6;text-align:right">3.1%</div>
+            <div style="color:#8b9aa6;overflow:hidden;text-overflow:ellipsis">nginx: reloading configuration…</div>
+            <div style="color:#8b9aa6;text-align:right">now</div>
+          </div>
+
+          <div style="color:#5b6b7a;text-align:right">2</div>
+          <div style="color:#35d07f;font-size:11px">●</div>
+          <div style="color:#cbd5dd">db-01</div>
+          <div style="color:#5b6b7a">detached</div>
+          <div style="color:#cbd5dd">pg_dump</div>
+          <div style="color:#8b9aa6;text-align:right">42m</div>
+          <div style="color:#e3bf4d;text-align:right">61%</div>
+          <div style="color:#8b9aa6;overflow:hidden;text-overflow:ellipsis">dumping table events … 78%</div>
+          <div style="color:#5b6b7a;text-align:right">4s</div>
+
+          <div style="color:#5b6b7a;text-align:right">3</div>
+          <div style="color:#35d07f;font-size:11px">●</div>
+          <div style="color:#cbd5dd">db-01</div>
+          <div style="color:#5b6b7a">detached</div>
+          <div style="color:#8b9aa6">-bash</div>
+          <div style="color:#8b9aa6;text-align:right">2h</div>
+          <div style="color:#5b6b7a;text-align:right">0.0%</div>
+          <div style="color:#5b6b7a;overflow:hidden;text-overflow:ellipsis">matt@db-01:~$</div>
+          <div style="color:#5b6b7a;text-align:right">18m</div>
+
+          <div style="color:#5b6b7a;text-align:right">4</div>
+          <div style="color:#e3bf4d;font-size:11px">●</div>
+          <div style="color:#cbd5dd">build-01</div>
+          <div style="color:#5b6b7a">detached</div>
+          <div style="color:#cbd5dd">cargo build</div>
+          <div style="color:#8b9aa6;text-align:right">11m</div>
+          <div style="color:#ef5f52;text-align:right">94%</div>
+          <div style="color:#8b9aa6;overflow:hidden;text-overflow:ellipsis">Compiling ratatui v0.29.0</div>
+          <div style="color:#5b6b7a;text-align:right">1s</div>
+
+          <div style="color:#5b6b7a;text-align:right">5</div>
+          <div style="color:#35d07f;font-size:11px">●</div>
+          <div style="color:#cbd5dd">cache-01</div>
+          <div style="color:#5b6b7a">detached</div>
+          <div style="color:#8b9aa6">redis-cli</div>
+          <div style="color:#8b9aa6;text-align:right">1h</div>
+          <div style="color:#5b6b7a;text-align:right">0.2%</div>
+          <div style="color:#5b6b7a;overflow:hidden;text-overflow:ellipsis">127.0.0.1:6379&gt;</div>
+          <div style="color:#5b6b7a;text-align:right">32m</div>
+
+          <div style="color:#5b6b7a;text-align:right">6</div>
+          <div style="color:#ef5f52;font-size:11px">●</div>
+          <div style="color:#cbd5dd">edge-01</div>
+          <div style="color:#ef5f52">dropped</div>
+          <div style="color:#8b9aa6">tail -f</div>
+          <div style="color:#8b9aa6;text-align:right">3h</div>
+          <div style="color:#47555f;text-align:right">—</div>
+          <div style="color:#8b9aa6;overflow:hidden;text-overflow:ellipsis">connection reset — <span style="color:#58d6d0">r</span> reconnect, scrollback kept</div>
+          <div style="color:#5b6b7a;text-align:right">6m</div>
+        </div>
+
+        <div style="position:absolute;bottom:-9px;left:16px;display:flex;gap:14px;background:#0a0d10;padding:0 9px;font-size:11.5px;color:#47555f">
+          <span><span style="color:#8b9aa6">↑↓</span> select</span>
+          <span><span style="color:#8b9aa6">⏎</span> attach</span>
+          <span><span style="color:#8b9aa6">d</span> detach</span>
+          <span><span style="color:#8b9aa6">n</span> new</span>
+          <span><span style="color:#8b9aa6">w</span> close</span>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:26px">
+        <div style="position:relative;border:1px solid #2a3540;border-radius:6px;background:#0c1014;padding:16px 14px 12px">
+          <div style="position:absolute;top:-9px;left:16px;display:flex;align-items:center;gap:8px;background:#0a0d10;padding:0 9px;font-size:12px">
+            <span style="color:#58d6d0;font-weight:700">2</span><span style="color:#cbd5dd;letter-spacing:.1em">quick connect</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px;font-size:12.5px">
+            <div style="display:grid;grid-template-columns:3ch 1fr 8ch;gap:10px;align-items:center"><span style="color:#58d6d0">1</span><span style="color:#cbd5dd">web-01</span><span style="color:#5b6b7a;text-align:right;font-size:11.5px">no session</span></div>
+            <div style="display:grid;grid-template-columns:3ch 1fr 8ch;gap:10px;align-items:center"><span style="color:#58d6d0">2</span><span style="color:#cbd5dd">web-03</span><span style="color:#5b6b7a;text-align:right;font-size:11.5px">no session</span></div>
+            <div style="display:grid;grid-template-columns:3ch 1fr 8ch;gap:10px;align-items:center"><span style="color:#58d6d0">3</span><span style="color:#cbd5dd">db-02</span><span style="color:#5b6b7a;text-align:right;font-size:11.5px">no session</span></div>
+            <div style="display:grid;grid-template-columns:3ch 1fr 8ch;gap:10px;align-items:center"><span style="color:#58d6d0">4</span><span style="color:#cbd5dd">monitor-01</span><span style="color:#5b6b7a;text-align:right;font-size:11.5px">no session</span></div>
+            <div style="display:grid;grid-template-columns:3ch 1fr 8ch;gap:10px;align-items:center"><span style="color:#47555f">5</span><span style="color:#8b9aa6">staging-web-01</span><span style="color:#47555f;text-align:right;font-size:11.5px">offline</span></div>
+          </div>
+          <div style="margin-top:12px;color:#5b6b7a;font-size:11.5px">Press the number to open a session.</div>
+        </div>
+
+        <div style="position:relative;border:1px solid #2a3540;border-radius:6px;background:#0c1014;padding:16px 14px 12px">
+          <div style="position:absolute;top:-9px;left:16px;display:flex;align-items:center;gap:8px;background:#0a0d10;padding:0 9px;font-size:12px">
+            <span style="color:#58d6d0;font-weight:700">3</span><span style="color:#cbd5dd;letter-spacing:.1em">broadcast</span>
+            <span style="color:#3a4750">│</span><span style="color:#5b6b7a">type once, many hosts</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:9px;font-size:12.5px">
+            <div style="display:flex;align-items:center;gap:9px">
+              <span style="color:#5b6b7a">to</span>
+              <span style="padding:2px 8px;border-radius:3px;background:#16212a;border:1px solid #2f4652;color:#cbd5dd">tag:web</span>
+              <span style="color:#5b6b7a;font-size:11.5px">3 hosts</span>
+            </div>
+            <div style="padding:9px 11px;border:1px solid #232c34;border-radius:4px;background:#080b0e;color:#cbd5dd">systemctl reload nginx<span style="background:#58d6d0;color:#080b0e">&nbsp;</span></div>
+            <div style="display:flex;flex-direction:column;gap:4px;font-size:11.5px">
+              <div style="display:grid;grid-template-columns:11ch 1fr;gap:10px"><span style="color:#35d07f">web-01 ok</span><span style="color:#5b6b7a">exit 0 · 40ms</span></div>
+              <div style="display:grid;grid-template-columns:11ch 1fr;gap:10px"><span style="color:#35d07f">web-02 ok</span><span style="color:#5b6b7a">exit 0 · 38ms</span></div>
+              <div style="display:grid;grid-template-columns:11ch 1fr;gap:10px"><span style="color:#e3bf4d">web-03 …</span><span style="color:#5b6b7a">running</span></div>
+            </div>
+          </div>
+          <div style="position:absolute;bottom:-9px;left:16px;display:flex;gap:14px;background:#0a0d10;padding:0 9px;font-size:11.5px;color:#47555f">
+            <span><span style="color:#8b9aa6">b</span> broadcast</span><span><span style="color:#8b9aa6">t</span> change target</span>
+          </div>
+        </div>
+
+        <div style="position:relative;border:1px solid #2a3540;border-radius:6px;background:#0c1014;padding:16px 14px 12px">
+          <div style="position:absolute;top:-9px;left:16px;display:flex;align-items:center;gap:8px;background:#0a0d10;padding:0 9px;font-size:12px">
+            <span style="color:#58d6d0;font-weight:700">4</span><span style="color:#cbd5dd;letter-spacing:.1em">activity</span>
+            <span style="color:#3a4750">│</span><span style="color:#5b6b7a">last 15m</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:7px;font-size:11.5px">
+            <div style="display:grid;grid-template-columns:9ch 1fr;gap:10px"><span style="color:#5b6b7a">12:25</span><span style="color:#8b9aa6"><span style="color:#ef5f52">edge-01</span> session dropped</span></div>
+            <div style="display:grid;grid-template-columns:9ch 1fr;gap:10px"><span style="color:#5b6b7a">12:19</span><span style="color:#8b9aa6"><span style="color:#e3bf4d">build-01</span> cpu over 90% for 4m</span></div>
+            <div style="display:grid;grid-template-columns:9ch 1fr;gap:10px"><span style="color:#5b6b7a">12:14</span><span style="color:#8b9aa6"><span style="color:#cbd5dd">db-01</span> pg_dump started</span></div>
+            <div style="display:grid;grid-template-columns:9ch 1fr;gap:10px"><span style="color:#5b6b7a">12:11</span><span style="color:#8b9aa6"><span style="color:#cbd5dd">web-02</span> attached</span></div>
+            <div style="display:grid;grid-template-columns:9ch 1fr;gap:10px"><span style="color:#5b6b7a">12:10</span><span style="color:#8b9aa6"><span style="color:#47555f">staging-web-01</span> went offline</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ══════════════════════ 2 · HOSTS ══════════════════════ -->
+    <sc-if value="{{ isHosts }}" hint-placeholder-val="{{ true }}">
+    <div style="padding:20px 16px 8px">
+      <div style="position:relative;border:1px solid #2a3540;border-radius:6px;background:#0c1014;padding:16px 14px 12px">
+        <div style="position:absolute;top:-9px;left:16px;display:flex;align-items:center;gap:8px;background:#0a0d10;padding:0 9px;font-size:12px">
+          <span style="color:#58d6d0;font-weight:700">1</span><span style="color:#cbd5dd;letter-spacing:.1em">hosts</span>
+          <span style="color:#3a4750">│</span><span style="color:#5b6b7a">11 hosts · refreshed 4s ago</span>
+        </div>
+        <div style="position:absolute;top:-9px;right:16px;background:#0a0d10;padding:0 9px;font-size:12px;color:#5b6b7a">sort <span style="color:#8b9aa6">load ↓</span></div>
+
+        <div style="display:grid;grid-template-columns:14px 15ch 14ch 6ch 8ch 9ch 9ch 6ch 12ch 1fr;gap:0 14px;font-size:12.5px;align-items:center;white-space:nowrap">
+          <div></div>
+          <div style="color:#5b6b7a;letter-spacing:.1em">NAME</div>
+          <div style="color:#5b6b7a;letter-spacing:.1em">ADDRESS</div>
+          <div style="color:#5b6b7a;letter-spacing:.1em;text-align:right">SESS</div>
+          <div style="color:#5b6b7a;letter-spacing:.1em">CPU</div>
+          <div style="color:#5b6b7a;letter-spacing:.1em">MEM</div>
+          <div style="color:#5b6b7a;letter-spacing:.1em">DISK /</div>
+          <div style="color:#5b6b7a;letter-spacing:.1em;text-align:right">RTT</div>
+          <div style="color:#5b6b7a;letter-spacing:.1em">RTT 60s</div>
+          <div style="color:#5b6b7a;letter-spacing:.1em">TAGS</div>
+
+          <div style="grid-column:1/-1;height:1px;background:#1a2129;margin:8px 0 4px"></div>
+
+          <div style="color:#35d07f;font-size:11px">●</div>
+          <div style="color:#cbd5dd">web-01</div>
+          <div style="color:#5b6b7a">127.0.0.11</div>
+          <div style="color:#47555f;text-align:right">·</div>
+          <div style="display:grid;grid-template-columns:1fr 4ch;gap:7px;align-items:center"><div style="height:8px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:8%;height:100%;background:linear-gradient(90deg,#35d07f,#e3bf4d 60%,#ef5f52);background-size:60px 100%"></div></div><span style="color:#8b9aa6;text-align:right">8%</span></div>
+          <div style="display:grid;grid-template-columns:1fr 4ch;gap:7px;align-items:center"><div style="height:8px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:31%;height:100%;background:#5aa9f0"></div></div><span style="color:#8b9aa6;text-align:right">31%</span></div>
+          <div style="display:grid;grid-template-columns:1fr 4ch;gap:7px;align-items:center"><div style="height:8px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:22%;height:100%;background:#35d07f"></div></div><span style="color:#8b9aa6;text-align:right">22%</span></div>
+          <div style="color:#8b9aa6;text-align:right">0.4</div>
+          <div style="color:#35d07f;font-size:12px;letter-spacing:-1px">⣀⣀⣀⣠⣀⣀⣀⣀⣄⣀⣀</div>
+          <div style="display:flex;gap:6px;font-size:11.5px"><span style="color:#5b6b7a">prod</span><span style="color:#47555f">web</span></div>
+
+          <div style="grid-column:1/-1;display:grid;grid-template-columns:14px 15ch 14ch 6ch 8ch 9ch 9ch 6ch 12ch 1fr;gap:0 14px;align-items:center;background:#16212a;box-shadow:inset 2px 0 0 #58d6d0;border-radius:2px;margin:1px -8px;padding:3px 8px">
+            <div style="color:#35d07f;font-size:11px">●</div>
+            <div style="color:#fff;font-weight:500">web-02</div>
+            <div style="color:#8b9aa6">127.0.0.12</div>
+            <div style="color:#58d6d0;text-align:right">1</div>
+            <div style="display:grid;grid-template-columns:1fr 4ch;gap:7px;align-items:center"><div style="height:8px;background:#1b2731;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:12%;height:100%;background:linear-gradient(90deg,#35d07f,#e3bf4d 60%,#ef5f52);background-size:60px 100%"></div></div><span style="color:#cbd5dd;text-align:right">12%</span></div>
+            <div style="display:grid;grid-template-columns:1fr 4ch;gap:7px;align-items:center"><div style="height:8px;background:#1b2731;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:46%;height:100%;background:#5aa9f0"></div></div><span style="color:#cbd5dd;text-align:right">46%</span></div>
+            <div style="display:grid;grid-template-columns:1fr 4ch;gap:7px;align-items:center"><div style="height:8px;background:#1b2731;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:24%;height:100%;background:#35d07f"></div></div><span style="color:#cbd5dd;text-align:right">24%</span></div>
+            <div style="color:#cbd5dd;text-align:right">0.4</div>
+            <div style="color:#35d07f;font-size:12px;letter-spacing:-1px">⣀⣀⣠⣄⣀⣀⣀⣠⣀⣀⣀</div>
+            <div style="display:flex;gap:6px;font-size:11.5px"><span style="color:#8b9aa6">prod</span><span style="color:#5b6b7a">web</span></div>
+          </div>
+
+          <div style="color:#35d07f;font-size:11px">●</div>
+          <div style="color:#cbd5dd">web-03</div>
+          <div style="color:#5b6b7a">127.0.0.13</div>
+          <div style="color:#47555f;text-align:right">·</div>
+          <div style="display:grid;grid-template-columns:1fr 4ch;gap:7px;align-items:center"><div style="height:8px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:15%;height:100%;background:linear-gradient(90deg,#35d07f,#e3bf4d 60%,#ef5f52);background-size:60px 100%"></div></div><span style="color:#8b9aa6;text-align:right">15%</span></div>
+          <div style="display:grid;grid-template-columns:1fr 4ch;gap:7px;align-items:center"><div style="height:8px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:38%;height:100%;background:#5aa9f0"></div></div><span style="color:#8b9aa6;text-align:right">38%</span></div>
+          <div style="display:grid;grid-template-columns:1fr 4ch;gap:7px;align-items:center"><div style="height:8px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:26%;height:100%;background:#35d07f"></div></div><span style="color:#8b9aa6;text-align:right">26%</span></div>
+          <div style="color:#8b9aa6;text-align:right">0.6</div>
+          <div style="color:#35d07f;font-size:12px;letter-spacing:-1px">⣀⣠⣀⣀⣄⣀⣀⣀⣀⣠⣀</div>
+          <div style="display:flex;gap:6px;font-size:11.5px"><span style="color:#5b6b7a">prod</span><span style="color:#47555f">web</span></div>
+
+          <div style="color:#e3bf4d;font-size:11px">●</div>
+          <div style="color:#cbd5dd">db-01</div>
+          <div style="color:#5b6b7a">127.0.0.14</div>
+          <div style="color:#58d6d0;text-align:right">2</div>
+          <div style="display:grid;grid-template-columns:1fr 4ch;gap:7px;align-items:center"><div style="height:8px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:61%;height:100%;background:linear-gradient(90deg,#35d07f,#e3bf4d 60%,#ef5f52);background-size:60px 100%"></div></div><span style="color:#e3bf4d;text-align:right">61%</span></div>
+          <div style="display:grid;grid-template-columns:1fr 4ch;gap:7px;align-items:center"><div style="height:8px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:72%;height:100%;background:#5aa9f0"></div></div><span style="color:#8b9aa6;text-align:right">72%</span></div>
+          <div style="display:grid;grid-template-columns:1fr 4ch;gap:7px;align-items:center"><div style="height:8px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:81%;height:100%;background:#e3bf4d"></div></div><span style="color:#e3bf4d;text-align:right">81%</span></div>
+          <div style="color:#8b9aa6;text-align:right">0.5</div>
+          <div style="color:#35d07f;font-size:12px;letter-spacing:-1px">⣀⣠⣤⣶⣤⣠⣀⣀⣠⣄⣀</div>
+          <div style="display:flex;gap:6px;font-size:11.5px"><span style="color:#5b6b7a">prod</span><span style="color:#47555f">db</span></div>
+
+          <div style="color:#35d07f;font-size:11px">●</div>
+          <div style="color:#cbd5dd">db-02</div>
+          <div style="color:#5b6b7a">127.0.0.15</div>
+          <div style="color:#47555f;text-align:right">·</div>
+          <div style="display:grid;grid-template-columns:1fr 4ch;gap:7px;align-items:center"><div style="height:8px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:14%;height:100%;background:linear-gradient(90deg,#35d07f,#e3bf4d 60%,#ef5f52);background-size:60px 100%"></div></div><span style="color:#8b9aa6;text-align:right">14%</span></div>
+          <div style="display:grid;grid-template-columns:1fr 4ch;gap:7px;align-items:center"><div style="height:8px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:44%;height:100%;background:#5aa9f0"></div></div><span style="color:#8b9aa6;text-align:right">44%</span></div>
+          <div style="display:grid;grid-template-columns:1fr 4ch;gap:7px;align-items:center"><div style="height:8px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:29%;height:100%;background:#35d07f"></div></div><span style="color:#8b9aa6;text-align:right">29%</span></div>
+          <div style="color:#8b9aa6;text-align:right">0.7</div>
+          <div style="color:#35d07f;font-size:12px;letter-spacing:-1px">⣀⣀⣄⣀⣀⣠⣀⣀⣀⣀⣄</div>
+          <div style="display:flex;gap:6px;font-size:11.5px"><span style="color:#5b6b7a">prod</span><span style="color:#47555f">db</span></div>
+
+          <div style="color:#35d07f;font-size:11px">●</div>
+          <div style="color:#cbd5dd">cache-01</div>
+          <div style="color:#5b6b7a">127.0.0.16</div>
+          <div style="color:#58d6d0;text-align:right">1</div>
+          <div style="display:grid;grid-template-columns:1fr 4ch;gap:7px;align-items:center"><div style="height:8px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:6%;height:100%;background:linear-gradient(90deg,#35d07f,#e3bf4d 60%,#ef5f52);background-size:60px 100%"></div></div><span style="color:#8b9aa6;text-align:right">6%</span></div>
+          <div style="display:grid;grid-template-columns:1fr 4ch;gap:7px;align-items:center"><div style="height:8px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:58%;height:100%;background:#5aa9f0"></div></div><span style="color:#8b9aa6;text-align:right">58%</span></div>
+          <div style="display:grid;grid-template-columns:1fr 4ch;gap:7px;align-items:center"><div style="height:8px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:18%;height:100%;background:#35d07f"></div></div><span style="color:#8b9aa6;text-align:right">18%</span></div>
+          <div style="color:#8b9aa6;text-align:right">0.3</div>
+          <div style="color:#35d07f;font-size:12px;letter-spacing:-1px">⣀⣠⣤⣄⣀⣀⣀⣀⣠⣀⣀</div>
+          <div style="display:flex;gap:6px;font-size:11.5px"><span style="color:#5b6b7a">prod</span><span style="color:#47555f">cache</span></div>
+
+          <div style="color:#ef5f52;font-size:11px">●</div>
+          <div style="color:#cbd5dd">edge-01</div>
+          <div style="color:#5b6b7a">127.0.0.17</div>
+          <div style="color:#ef5f52;text-align:right">1</div>
+          <div style="grid-column:5/10;color:#ef5f52;font-size:12px">connection reset 6m ago <span style="color:#5b6b7a">· last seen cpu 9%, mem 41% ·</span> <span style="color:#58d6d0">r</span> <span style="color:#8b9aa6">reconnect</span></div>
+          <div style="display:flex;gap:6px;font-size:11.5px"><span style="color:#5b6b7a">prod</span><span style="color:#47555f">edge</span></div>
+
+          <div style="color:#e3bf4d;font-size:11px">●</div>
+          <div style="color:#cbd5dd">build-01</div>
+          <div style="color:#5b6b7a">127.0.0.18</div>
+          <div style="color:#58d6d0;text-align:right">1</div>
+          <div style="display:grid;grid-template-columns:1fr 4ch;gap:7px;align-items:center"><div style="height:8px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:94%;height:100%;background:linear-gradient(90deg,#35d07f,#e3bf4d 60%,#ef5f52);background-size:60px 100%"></div></div><span style="color:#ef5f52;text-align:right">94%</span></div>
+          <div style="display:grid;grid-template-columns:1fr 4ch;gap:7px;align-items:center"><div style="height:8px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:66%;height:100%;background:#5aa9f0"></div></div><span style="color:#8b9aa6;text-align:right">66%</span></div>
+          <div style="display:grid;grid-template-columns:1fr 4ch;gap:7px;align-items:center"><div style="height:8px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:47%;height:100%;background:#35d07f"></div></div><span style="color:#8b9aa6;text-align:right">47%</span></div>
+          <div style="color:#8b9aa6;text-align:right">0.5</div>
+          <div style="color:#e3bf4d;font-size:12px;letter-spacing:-1px">⣠⣤⣶⣿⣶⣤⣶⣿⣶⣤⣠</div>
+          <div style="display:flex;gap:6px;font-size:11.5px"><span style="color:#5b6b7a">ci</span><span style="color:#47555f">build</span></div>
+
+          <div style="color:#35d07f;font-size:11px">●</div>
+          <div style="color:#cbd5dd">monitor-01</div>
+          <div style="color:#5b6b7a">127.0.0.19</div>
+          <div style="color:#47555f;text-align:right">·</div>
+          <div style="display:grid;grid-template-columns:1fr 4ch;gap:7px;align-items:center"><div style="height:8px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:21%;height:100%;background:linear-gradient(90deg,#35d07f,#e3bf4d 60%,#ef5f52);background-size:60px 100%"></div></div><span style="color:#8b9aa6;text-align:right">21%</span></div>
+          <div style="display:grid;grid-template-columns:1fr 4ch;gap:7px;align-items:center"><div style="height:8px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:52%;height:100%;background:#5aa9f0"></div></div><span style="color:#8b9aa6;text-align:right">52%</span></div>
+          <div style="display:grid;grid-template-columns:1fr 4ch;gap:7px;align-items:center"><div style="height:8px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:63%;height:100%;background:#35d07f"></div></div><span style="color:#8b9aa6;text-align:right">63%</span></div>
+          <div style="color:#8b9aa6;text-align:right">0.4</div>
+          <div style="color:#35d07f;font-size:12px;letter-spacing:-1px">⣀⣀⣀⣀⣀⣀⣠⣤⣄⣀⣀</div>
+          <div style="display:flex;gap:6px;font-size:11.5px"><span style="color:#5b6b7a">prod</span><span style="color:#47555f">monitor</span></div>
+
+          <div style="color:#47555f;font-size:11px">◌</div>
+          <div style="color:#8b9aa6">staging-web-01</div>
+          <div style="color:#5b6b7a">127.0.0.20</div>
+          <div style="color:#47555f;text-align:right">·</div>
+          <div style="grid-column:5/10;color:#47555f;font-size:12px">offline since 12:10 <span style="color:#3a4750">· no response on 2222 ·</span> <span style="color:#58d6d0">r</span> <span style="color:#5b6b7a">retry</span></div>
+          <div style="display:flex;gap:6px;font-size:11.5px"><span style="color:#5b6b7a">staging</span><span style="color:#47555f">web</span></div>
+
+          <div style="color:#35d07f;font-size:11px">●</div>
+          <div style="color:#cbd5dd">jump-01</div>
+          <div style="color:#5b6b7a">10.0.4.2</div>
+          <div style="color:#47555f;text-align:right">·</div>
+          <div style="display:grid;grid-template-columns:1fr 4ch;gap:7px;align-items:center"><div style="height:8px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:3%;height:100%;background:linear-gradient(90deg,#35d07f,#e3bf4d 60%,#ef5f52);background-size:60px 100%"></div></div><span style="color:#8b9aa6;text-align:right">3%</span></div>
+          <div style="display:grid;grid-template-columns:1fr 4ch;gap:7px;align-items:center"><div style="height:8px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:19%;height:100%;background:#5aa9f0"></div></div><span style="color:#8b9aa6;text-align:right">19%</span></div>
+          <div style="display:grid;grid-template-columns:1fr 4ch;gap:7px;align-items:center"><div style="height:8px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:11%;height:100%;background:#35d07f"></div></div><span style="color:#8b9aa6;text-align:right">11%</span></div>
+          <div style="color:#8b9aa6;text-align:right">1.2</div>
+          <div style="color:#35d07f;font-size:12px;letter-spacing:-1px">⣀⣄⣀⣀⣀⣠⣀⣀⣀⣄⣀</div>
+          <div style="display:flex;gap:6px;font-size:11.5px"><span style="color:#5b6b7a">prod</span><span style="color:#47555f">jump</span></div>
+        </div>
+
+        <div style="position:absolute;bottom:-9px;left:16px;display:flex;gap:14px;background:#0a0d10;padding:0 9px;font-size:11.5px;color:#47555f">
+          <span><span style="color:#8b9aa6">↑↓</span> select</span>
+          <span><span style="color:#8b9aa6">⏎</span> connect</span>
+          <span><span style="color:#8b9aa6">m</span> monitor</span>
+          <span><span style="color:#8b9aa6">a</span> add</span>
+          <span><span style="color:#8b9aa6">e</span> edit</span>
+          <span><span style="color:#8b9aa6">/</span> search</span>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ══════════════════════ 3 · HEALTH ══════════════════════ -->
+    <sc-if value="{{ isHealth }}" hint-placeholder-val="{{ true }}">
+    <div style="padding:20px 16px 8px;display:flex;flex-direction:column;gap:24px">
+
+      <div style="position:relative;border:1px solid #2a3540;border-radius:6px;background:#0c1014;padding:16px 14px 14px">
+        <div style="position:absolute;top:-9px;left:16px;display:flex;align-items:center;gap:8px;background:#0a0d10;padding:0 9px;font-size:12px">
+          <span style="color:#58d6d0;font-weight:700">1</span><span style="color:#cbd5dd;letter-spacing:.1em">needs attention</span>
+          <span style="color:#3a4750">│</span><span style="color:#5b6b7a">3 of 11 hosts</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px;font-size:12.5px">
+          <div style="display:grid;grid-template-columns:12ch 9ch 1fr;gap:14px;align-items:baseline">
+            <span style="color:#ef5f52;font-weight:500">edge-01</span><span style="color:#ef5f52">offline</span>
+            <span style="color:#8b9aa6">connection reset 6m ago, 1 session waiting to reconnect <span style="color:#5b6b7a">· scrollback preserved</span></span>
+          </div>
+          <div style="display:grid;grid-template-columns:12ch 9ch 1fr;gap:14px;align-items:baseline">
+            <span style="color:#e3bf4d;font-weight:500">build-01</span><span style="color:#e3bf4d">cpu 94%</span>
+            <span style="color:#8b9aa6">over 90% for 4m — <span style="color:#cbd5dd">cargo build</span> in session 4 <span style="color:#5b6b7a">· expected during a build</span></span>
+          </div>
+          <div style="display:grid;grid-template-columns:12ch 9ch 1fr;gap:14px;align-items:baseline">
+            <span style="color:#e3bf4d;font-weight:500">db-01</span><span style="color:#e3bf4d">disk 81%</span>
+            <span style="color:#8b9aa6">/ has 71 GB free, filling ~4 GB/day <span style="color:#5b6b7a">· pg_dump writing to /backups</span></span>
+          </div>
+        </div>
+        <div style="position:absolute;bottom:-9px;left:16px;display:flex;gap:14px;background:#0a0d10;padding:0 9px;font-size:11.5px;color:#47555f">
+          <span><span style="color:#8b9aa6">⏎</span> open host</span><span><span style="color:#8b9aa6">r</span> reconnect</span>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:20px">
+
+        <div style="position:relative;border:1px solid #2a3540;border-radius:6px;background:#0c1014;padding:15px 13px 12px">
+          <div style="position:absolute;top:-9px;left:14px;display:flex;align-items:center;gap:7px;background:#0a0d10;padding:0 8px;font-size:11.5px">
+            <span style="color:#35d07f">●</span><span style="color:#cbd5dd;letter-spacing:.1em">web-02</span><span style="color:#3a4750">│</span><span style="color:#5b6b7a">1 session</span>
+          </div>
+          <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:7px"><span style="color:#35d07f;font-size:21px;font-weight:700">12<span style="font-size:12px;color:#5b6b7a">% cpu</span></span><span style="color:#5b6b7a;font-size:11px;margin-left:auto">load 0.4</span></div>
+          <div style="color:#35d07f;font-size:16px;line-height:1;letter-spacing:-1px;overflow:hidden;white-space:nowrap;margin-bottom:10px">⣀⣀⣠⣄⣀⣀⣠⣤⣄⣀⣀⣄⣠⣀⣀⣠⣄⣀</div>
+          <div style="display:flex;flex-direction:column;gap:5px;font-size:11px">
+            <div style="display:grid;grid-template-columns:5ch 1fr 5ch;gap:8px;align-items:center"><span style="color:#5b6b7a">mem</span><div style="height:7px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:46%;height:100%;background:#5aa9f0"></div></div><span style="color:#8b9aa6;text-align:right">46%</span></div>
+            <div style="display:grid;grid-template-columns:5ch 1fr 5ch;gap:8px;align-items:center"><span style="color:#5b6b7a">disk</span><div style="height:7px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:24%;height:100%;background:#35d07f"></div></div><span style="color:#8b9aa6;text-align:right">24%</span></div>
+            <div style="display:grid;grid-template-columns:5ch 1fr 5ch;gap:8px;align-items:center"><span style="color:#5b6b7a">net</span><span style="color:#b487f0">↓ 8.4M</span><span style="color:#58d6d0;text-align:right">↑1.2M</span></div>
+          </div>
+          <div style="margin-top:9px;color:#5b6b7a;font-size:11px">up 12d · deploy.sh running</div>
+        </div>
+
+        <div style="position:relative;border:1px solid #2f4652;border-radius:6px;background:#0c1014;padding:15px 13px 12px">
+          <div style="position:absolute;top:-9px;left:14px;display:flex;align-items:center;gap:7px;background:#0a0d10;padding:0 8px;font-size:11.5px">
+            <span style="color:#e3bf4d">●</span><span style="color:#cbd5dd;letter-spacing:.1em">db-01</span><span style="color:#3a4750">│</span><span style="color:#5b6b7a">2 sessions</span>
+          </div>
+          <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:7px"><span style="color:#e3bf4d;font-size:21px;font-weight:700">61<span style="font-size:12px;color:#5b6b7a">% cpu</span></span><span style="color:#5b6b7a;font-size:11px;margin-left:auto">load 4.9</span></div>
+          <div style="color:#e3bf4d;font-size:16px;line-height:1;letter-spacing:-1px;overflow:hidden;white-space:nowrap;margin-bottom:10px">⣠⣤⣶⣤⣠⣤⣶⣿⣶⣤⣶⣤⣠⣤⣶⣤⣠⣄</div>
+          <div style="display:flex;flex-direction:column;gap:5px;font-size:11px">
+            <div style="display:grid;grid-template-columns:5ch 1fr 5ch;gap:8px;align-items:center"><span style="color:#5b6b7a">mem</span><div style="height:7px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:72%;height:100%;background:#5aa9f0"></div></div><span style="color:#8b9aa6;text-align:right">72%</span></div>
+            <div style="display:grid;grid-template-columns:5ch 1fr 5ch;gap:8px;align-items:center"><span style="color:#5b6b7a">disk</span><div style="height:7px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:81%;height:100%;background:#e3bf4d"></div></div><span style="color:#e3bf4d;text-align:right">81%</span></div>
+            <div style="display:grid;grid-template-columns:5ch 1fr 5ch;gap:8px;align-items:center"><span style="color:#5b6b7a">net</span><span style="color:#b487f0">↓ 1.1M</span><span style="color:#58d6d0;text-align:right">↑6.0M</span></div>
+          </div>
+          <div style="margin-top:9px;color:#5b6b7a;font-size:11px">up 34d · pg_dump 78%</div>
+        </div>
+
+        <div style="position:relative;border:1px solid #2a3540;border-radius:6px;background:#0c1014;padding:15px 13px 12px">
+          <div style="position:absolute;top:-9px;left:14px;display:flex;align-items:center;gap:7px;background:#0a0d10;padding:0 8px;font-size:11.5px">
+            <span style="color:#e3bf4d">●</span><span style="color:#cbd5dd;letter-spacing:.1em">build-01</span><span style="color:#3a4750">│</span><span style="color:#5b6b7a">1 session</span>
+          </div>
+          <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:7px"><span style="color:#ef5f52;font-size:21px;font-weight:700">94<span style="font-size:12px;color:#5b6b7a">% cpu</span></span><span style="color:#5b6b7a;font-size:11px;margin-left:auto">load 7.8</span></div>
+          <div style="color:#ef5f52;font-size:16px;line-height:1;letter-spacing:-1px;overflow:hidden;white-space:nowrap;margin-bottom:10px">⣤⣶⣿⣿⣶⣿⣿⣿⣶⣿⣿⣶⣿⣿⣿⣶⣤⣶</div>
+          <div style="display:flex;flex-direction:column;gap:5px;font-size:11px">
+            <div style="display:grid;grid-template-columns:5ch 1fr 5ch;gap:8px;align-items:center"><span style="color:#5b6b7a">mem</span><div style="height:7px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:66%;height:100%;background:#5aa9f0"></div></div><span style="color:#8b9aa6;text-align:right">66%</span></div>
+            <div style="display:grid;grid-template-columns:5ch 1fr 5ch;gap:8px;align-items:center"><span style="color:#5b6b7a">disk</span><div style="height:7px;background:#161d24;mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 3px,transparent 3px 5px)"><div style="width:47%;height:100%;background:#35d07f"></div></div><span style="color:#8b9aa6;text-align:right">47%</span></div>
+            <div style="display:grid;grid-template-columns:5ch 1fr 5ch;gap:8px;align-items:center"><span style="color:#5b6b7a">net</span><span style="color:#b487f0">↓ 420k</span><span style="color:#58d6d0;text-align:right">↑88k</span></div>
+          </div>
+          <div style="margin-top:9px;color:#5b6b7a;font-size:11px">up 3d · cargo build 11m</div>
+        </div>
+
+        <div style="position:relative;border:1px solid #232c34;border-radius:6px;background:#0b0e12;padding:15px 13px 12px">
+          <div style="position:absolute;top:-9px;left:14px;display:flex;align-items:center;gap:7px;background:#0a0d10;padding:0 8px;font-size:11.5px">
+            <span style="color:#ef5f52">●</span><span style="color:#8b9aa6;letter-spacing:.1em">edge-01</span><span style="color:#3a4750">│</span><span style="color:#ef5f52">offline</span>
+          </div>
+          <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:7px"><span style="color:#47555f;font-size:21px;font-weight:700">—</span><span style="color:#5b6b7a;font-size:11px;margin-left:auto">last 9% cpu</span></div>
+          <div style="color:#2f3a43;font-size:16px;line-height:1;letter-spacing:-1px;overflow:hidden;white-space:nowrap;margin-bottom:10px">⣀⣀⣠⣄⣀⣀⣠⣄⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀</div>
+          <div style="color:#8b9aa6;font-size:11.5px;line-height:1.5">Connection reset 6m ago.<br /><span style="color:#5b6b7a">Values are the last reading, not live.</span></div>
+          <div style="margin-top:11px;font-size:11px"><span style="color:#58d6d0">r</span> <span style="color:#8b9aa6">reconnect</span> <span style="color:#3a4750">·</span> <span style="color:#58d6d0">s</span> <span style="color:#8b9aa6">silence 1h</span></div>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:26px">
+        <div style="position:relative;border:1px solid #2a3540;border-radius:6px;background:#0c1014;padding:16px 14px 12px">
+          <div style="position:absolute;top:-9px;left:16px;display:flex;align-items:center;gap:8px;background:#0a0d10;padding:0 9px;font-size:12px">
+            <span style="color:#58d6d0;font-weight:700">2</span><span style="color:#cbd5dd;letter-spacing:.1em">busiest right now</span>
+            <span style="color:#3a4750">│</span><span style="color:#5b6b7a">across all hosts</span>
+          </div>
+          <div style="display:grid;grid-template-columns:11ch 1fr 5ch 6ch;gap:5px 12px;font-size:12px;align-items:center">
+            <div style="color:#5b6b7a;letter-spacing:.1em">HOST</div><div style="color:#5b6b7a;letter-spacing:.1em">PROCESS</div><div style="color:#5b6b7a;text-align:right">CPU</div><div style="color:#5b6b7a;text-align:right">RSS</div>
+            <div style="grid-column:1/-1;height:1px;background:#1a2129;margin:3px 0"></div>
+            <div style="color:#cbd5dd">build-01</div><div style="color:#cbd5dd">rustc</div><div style="color:#ef5f52;text-align:right">88.2</div><div style="color:#8b9aa6;text-align:right">2.1 GB</div>
+            <div style="color:#cbd5dd">db-01</div><div style="color:#cbd5dd">postgres: pg_dump</div><div style="color:#e3bf4d;text-align:right">52.4</div><div style="color:#8b9aa6;text-align:right">840 MB</div>
+            <div style="color:#cbd5dd">db-01</div><div style="color:#8b9aa6">postgres: writer</div><div style="color:#8b9aa6;text-align:right">7.1</div><div style="color:#8b9aa6;text-align:right">210 MB</div>
+            <div style="color:#cbd5dd">web-02</div><div style="color:#8b9aa6">nginx: master</div><div style="color:#8b9aa6;text-align:right">3.1</div><div style="color:#8b9aa6;text-align:right">1.7 MB</div>
+            <div style="color:#cbd5dd">cache-01</div><div style="color:#8b9aa6">redis-server</div><div style="color:#5b6b7a;text-align:right">0.9</div><div style="color:#8b9aa6;text-align:right">96 MB</div>
+          </div>
+          <div style="position:absolute;bottom:-9px;left:16px;display:flex;gap:14px;background:#0a0d10;padding:0 9px;font-size:11.5px;color:#47555f">
+            <span><span style="color:#8b9aa6">⏎</span> open session</span><span><span style="color:#8b9aa6">s</span> sort</span>
+          </div>
+        </div>
+
+        <div style="position:relative;border:1px solid #2a3540;border-radius:6px;background:#0c1014;padding:16px 14px 12px">
+          <div style="position:absolute;top:-9px;left:16px;display:flex;align-items:center;gap:8px;background:#0a0d10;padding:0 9px;font-size:12px">
+            <span style="color:#58d6d0;font-weight:700">3</span><span style="color:#cbd5dd;letter-spacing:.1em">reachability</span>
+            <span style="color:#3a4750">│</span><span style="color:#5b6b7a">rtt, last 10m</span>
+          </div>
+          <div style="display:grid;grid-template-columns:12ch 1fr 6ch;gap:6px 12px;font-size:12px;align-items:center">
+            <div style="color:#cbd5dd">web-01</div><div style="color:#35d07f;font-size:13px;letter-spacing:-1px;overflow:hidden;white-space:nowrap">⣀⣀⣀⣠⣀⣀⣀⣀⣄⣀⣀⣀⣠⣀⣀⣀⣀⣄⣀⣀</div><div style="color:#8b9aa6;text-align:right">0.4</div>
+            <div style="color:#cbd5dd">web-02</div><div style="color:#35d07f;font-size:13px;letter-spacing:-1px;overflow:hidden;white-space:nowrap">⣀⣀⣠⣄⣀⣀⣀⣠⣀⣀⣀⣄⣀⣀⣠⣀⣀⣀⣄⣀</div><div style="color:#8b9aa6;text-align:right">0.4</div>
+            <div style="color:#cbd5dd">web-03</div><div style="color:#35d07f;font-size:13px;letter-spacing:-1px;overflow:hidden;white-space:nowrap">⣀⣠⣀⣀⣄⣀⣀⣀⣀⣠⣀⣀⣄⣀⣀⣠⣀⣀⣀⣀</div><div style="color:#8b9aa6;text-align:right">0.6</div>
+            <div style="color:#cbd5dd">db-01</div><div style="color:#35d07f;font-size:13px;letter-spacing:-1px;overflow:hidden;white-space:nowrap">⣀⣠⣤⣶⣤⣠⣀⣀⣠⣄⣀⣀⣠⣤⣄⣀⣀⣠⣀⣀</div><div style="color:#8b9aa6;text-align:right">0.5</div>
+            <div style="color:#cbd5dd">db-02</div><div style="color:#35d07f;font-size:13px;letter-spacing:-1px;overflow:hidden;white-space:nowrap">⣀⣀⣄⣀⣀⣠⣀⣀⣀⣀⣄⣀⣀⣠⣀⣀⣄⣀⣀⣀</div><div style="color:#8b9aa6;text-align:right">0.7</div>
+            <div style="color:#cbd5dd">cache-01</div><div style="color:#35d07f;font-size:13px;letter-spacing:-1px;overflow:hidden;white-space:nowrap">⣀⣠⣤⣄⣀⣀⣀⣀⣠⣀⣀⣄⣀⣀⣠⣄⣀⣀⣀⣀</div><div style="color:#8b9aa6;text-align:right">0.3</div>
+            <div style="color:#8b9aa6">edge-01</div><div style="color:#ef5f52;font-size:13px;letter-spacing:-1px;overflow:hidden;white-space:nowrap">⣀⣠⣄⣀⣤⣀⣀⣠⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀</div><div style="color:#ef5f52;text-align:right">×</div>
+            <div style="color:#cbd5dd">build-01</div><div style="color:#e3bf4d;font-size:13px;letter-spacing:-1px;overflow:hidden;white-space:nowrap">⣠⣤⣶⣿⣶⣤⣶⣿⣶⣤⣠⣤⣶⣿⣶⣤⣶⣤⣠⣄</div><div style="color:#8b9aa6;text-align:right">0.5</div>
+            <div style="color:#cbd5dd">monitor-01</div><div style="color:#35d07f;font-size:13px;letter-spacing:-1px;overflow:hidden;white-space:nowrap">⣀⣀⣀⣀⣀⣀⣠⣤⣄⣀⣀⣀⣀⣠⣀⣀⣀⣄⣀⣀</div><div style="color:#8b9aa6;text-align:right">0.4</div>
+            <div style="color:#8b9aa6">staging-web-01</div><div style="color:#2f3a43;font-size:13px;letter-spacing:-1px;overflow:hidden;white-space:nowrap">⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀</div><div style="color:#47555f;text-align:right">×</div>
+            <div style="color:#cbd5dd">jump-01</div><div style="color:#35d07f;font-size:13px;letter-spacing:-1px;overflow:hidden;white-space:nowrap">⣀⣄⣀⣀⣀⣠⣀⣀⣀⣄⣀⣀⣠⣄⣀⣀⣀⣠⣀⣀</div><div style="color:#8b9aa6;text-align:right">1.2</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ══════════════════════ 4 · TERMINAL + STRIP ══════════════════════ -->
+    <sc-if value="{{ isTerminal }}" hint-placeholder-val="{{ true }}">
+    <div style="padding:14px 16px 8px">
+      <div style="display:flex;gap:5px;font-size:12px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+        <span style="color:#47555f;letter-spacing:.1em;margin-right:6px">SESSIONS</span>
+        <span style="padding:3px 9px;border-radius:3px;background:#16212a;color:#fff;border:1px solid #2f4652">1 web-02 <span style="color:#35d07f">●</span></span>
+        <span style="padding:3px 9px;border-radius:3px;color:#8b9aa6;border:1px solid #1a2129">2 db-01 <span style="color:#e3bf4d">●</span></span>
+        <span style="padding:3px 9px;border-radius:3px;color:#8b9aa6;border:1px solid #1a2129">3 db-01 <span style="color:#35d07f">●</span></span>
+        <span style="padding:3px 9px;border-radius:3px;color:#8b9aa6;border:1px solid #1a2129">4 build-01 <span style="color:#e3bf4d">●</span></span>
+        <span style="padding:3px 9px;border-radius:3px;color:#8b9aa6;border:1px solid #1a2129">5 cache-01 <span style="color:#35d07f">●</span></span>
+        <span style="padding:3px 9px;border-radius:3px;color:#8b9aa6;border:1px solid #1a2129">6 edge-01 <span style="color:#ef5f52">●</span></span>
+        <span style="padding:3px 9px;border-radius:3px;color:#47555f;border:1px dashed #1a2129">+ new</span>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 330px;gap:14px">
+        <div style="border:1px solid #2a3540;border-radius:6px;background:#080b0e;padding:14px 16px;min-height:520px;font-size:12.5px;line-height:1.62">
+          <div style="display:flex;align-items:center;gap:10px;color:#47555f;font-size:11.5px;margin-bottom:10px">
+            <span style="color:#58d6d0">web-02</span><span>matt@127.0.0.12:2222</span><span style="color:#3a4750">│</span><span>up 8m</span><span style="color:#3a4750">│</span><span>rtt 0.4ms</span>
+            <span style="margin-left:auto;color:#e3bf4d">2 forwards</span>
+          </div>
+          <div style="color:#5b6b7a">Linux web-02 6.19.10-300.fc44.x86_64 #1 SMP PREEMPT_DYNAMIC Wed Mar 25 18:23:49 UTC 2026 x86_64</div>
+          <div style="height:10px"></div>
+          <div style="color:#8b9aa6"><span style="color:#35d07f">matt@web-02</span><span style="color:#47555f">:</span><span style="color:#5aa9f0">~</span><span style="color:#47555f">$</span> ./deploy.sh --release 2.14.4</div>
+          <div style="color:#cbd5dd">→ unpacking app-2.14.4.tar.gz</div>
+          <div style="color:#cbd5dd">→ running migrations … none pending</div>
+          <div style="color:#cbd5dd">→ reloading nginx</div>
+          <div style="color:#35d07f">✓ deployed 2.14.4 in 6.2s</div>
+          <div style="color:#8b9aa6"><span style="color:#35d07f">matt@web-02</span><span style="color:#47555f">:</span><span style="color:#5aa9f0">~</span><span style="color:#47555f">$</span> uptime; free -h | head -2</div>
+          <div style="color:#cbd5dd"> 02:18:21 up 12 days, 22:02,  1 user,  load average: 0.40, 0.44, 0.51</div>
+          <div style="color:#5b6b7a">              total        used        free      shared  buff/cache   available</div>
+          <div style="color:#cbd5dd">Mem:            62Gi        28Gi        15Gi       6.5Gi        21Gi         33Gi</div>
+          <div style="color:#8b9aa6"><span style="color:#35d07f">matt@web-02</span><span style="color:#47555f">:</span><span style="color:#5aa9f0">~</span><span style="color:#47555f">$</span> <span style="background:#58d6d0;color:#080b0e">&nbsp;</span></div>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:16px">
+          <div style="position:relative;border:1px solid #2a3540;border-radius:6px;background:#0c1014;padding:14px 12px 10px">
+            <div style="position:absolute;top:-9px;left:14px;display:flex;gap:7px;background:#0a0d10;padding:0 8px;font-size:11.5px"><span style="color:#58d6d0;font-weight:700">1</span><span style="color:#cbd5dd;letter-spacing:.1em">cpu</span></div>
+            <div style="display:flex;align-items:baseline;gap:8px"><span style="color:#35d07f;font-size:17px;font-weight:700">12<span style="font-size:11px;color:#5b6b7a">%</span></span><span style="color:#5b6b7a;font-size:11px">load 0.40 · 8 cores</span></div>
+            <div style="color:#35d07f;font-size:16px;line-height:1;letter-spacing:-1px;margin-top:6px;overflow:hidden;white-space:nowrap">⣀⣠⣄⣀⣀⣠⣤⣄⣀⣀⣄⣠⣀⣠⣄⣀⣤⣀⣀</div>
+          </div>
+          <div style="position:relative;border:1px solid #2a3540;border-radius:6px;background:#0c1014;padding:14px 12px 10px">
+            <div style="position:absolute;top:-9px;left:14px;display:flex;gap:7px;background:#0a0d10;padding:0 8px;font-size:11.5px"><span style="color:#58d6d0;font-weight:700">2</span><span style="color:#cbd5dd;letter-spacing:.1em">memory</span></div>
+            <div style="display:flex;align-items:baseline;gap:8px"><span style="color:#5aa9f0;font-size:17px;font-weight:700">30.6<span style="font-size:11px;color:#5b6b7a"> GB</span></span><span style="color:#5b6b7a;font-size:11px">/ 66.7 · 46%</span></div>
+            <div style="height:9px;background:#161d24;margin-top:8px;mask-image:repeating-linear-gradient(90deg,#000 0 4px,transparent 4px 6px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 4px,transparent 4px 6px)"><div style="width:46%;height:100%;background:#5aa9f0"></div></div>
+          </div>
+          <div style="position:relative;border:1px solid #2a3540;border-radius:6px;background:#0c1014;padding:14px 12px 10px">
+            <div style="position:absolute;top:-9px;left:14px;display:flex;gap:7px;background:#0a0d10;padding:0 8px;font-size:11.5px"><span style="color:#58d6d0;font-weight:700">3</span><span style="color:#cbd5dd;letter-spacing:.1em">net</span><span style="color:#3a4750">│</span><span style="color:#5b6b7a">eth0</span></div>
+            <div style="display:flex;align-items:baseline;gap:12px"><span style="color:#b487f0;font-size:15px;font-weight:700">↓ 8.4<span style="font-size:11px;color:#5b6b7a">M</span></span><span style="color:#58d6d0;font-size:15px;font-weight:700">↑ 1.2<span style="font-size:11px;color:#5b6b7a">M</span></span></div>
+            <div style="color:#b487f0;font-size:15px;line-height:1;letter-spacing:-1px;margin-top:6px;overflow:hidden;white-space:nowrap">⣠⣤⣶⣤⣠⣀⣠⣤⣶⣿⣶⣤⣠⣀⣠⣤⣶⣤⣀</div>
+            <div style="color:#58d6d0;font-size:15px;line-height:1;letter-spacing:-1px;overflow:hidden;white-space:nowrap;transform:scaleY(-1)">⣀⣀⣠⣄⣀⣀⣀⣠⣄⣀⣠⣤⣄⣀⣀⣀⣀⣠⣄</div>
+          </div>
+          <div style="position:relative;border:1px solid #2a3540;border-radius:6px;background:#0c1014;padding:14px 12px 10px">
+            <div style="position:absolute;top:-9px;left:14px;display:flex;gap:7px;background:#0a0d10;padding:0 8px;font-size:11.5px"><span style="color:#58d6d0;font-weight:700">4</span><span style="color:#cbd5dd;letter-spacing:.1em">top</span><span style="color:#3a4750">│</span><span style="color:#5b6b7a">by cpu</span></div>
+            <div style="display:grid;grid-template-columns:1fr 4ch 7ch;gap:4px 8px;font-size:11px">
+              <div style="color:#cbd5dd;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">nginx: master</div><div style="color:#e3bf4d;text-align:right">3.1</div><div style="color:#8b9aa6;text-align:right">1.7 MB</div>
+              <div style="color:#cbd5dd;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">sshd: matt@pts/0</div><div style="color:#8b9aa6;text-align:right">0.4</div><div style="color:#8b9aa6;text-align:right">6.9 MB</div>
+              <div style="color:#8b9aa6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">-bash</div><div style="color:#5b6b7a;text-align:right">0.0</div><div style="color:#8b9aa6;text-align:right">3.6 MB</div>
+              <div style="color:#8b9aa6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">nginx: worker ×6</div><div style="color:#5b6b7a;text-align:right">0.0</div><div style="color:#8b9aa6;text-align:right">16.8 MB</div>
+            </div>
+          </div>
+          <div style="color:#47555f;font-size:11px;padding:0 2px"><span style="color:#8b9aa6">F5</span> hide strip <span style="color:#3a4750">·</span> <span style="color:#8b9aa6">m</span> full monitor</div>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ══════════════════════ 5 · FILES + FORWARDS ══════════════════════ -->
+    <sc-if value="{{ isFiles }}" hint-placeholder-val="{{ true }}">
+    <div style="padding:20px 16px 8px;display:flex;flex-direction:column;gap:24px">
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:26px">
+        <div style="position:relative;border:1px solid #2f4652;border-radius:6px;background:#0c1014;padding:16px 14px 12px">
+          <div style="position:absolute;top:-9px;left:16px;display:flex;align-items:center;gap:8px;background:#0a0d10;padding:0 9px;font-size:12px">
+            <span style="color:#58d6d0;font-weight:700">1</span><span style="color:#cbd5dd;letter-spacing:.1em">local</span>
+            <span style="color:#3a4750">│</span><span style="color:#5b6b7a;white-space:nowrap">…/essh-demo/home/Downloads</span>
+          </div>
+          <div style="display:grid;grid-template-columns:14px 1fr 10ch;gap:5px 12px;font-size:12.5px;align-items:center">
+            <div></div><div style="color:#5b6b7a;letter-spacing:.1em">NAME</div><div style="color:#5b6b7a;letter-spacing:.1em;text-align:right">SIZE</div>
+            <div style="grid-column:1/-1;height:1px;background:#1a2129;margin:3px 0"></div>
+            <div style="color:#47555f">↰</div><div style="color:#5b6b7a">..</div><div></div>
+            <div style="color:#58d6d0">▸</div><div style="color:#fff;background:#16212a;padding:1px 5px;border-radius:2px;margin-left:-5px">app-2.14.4.tar.gz</div><div style="color:#8b9aa6;text-align:right">120.0 KB</div>
+            <div></div><div style="color:#cbd5dd">deploy-notes.txt</div><div style="color:#8b9aa6;text-align:right">19 B</div>
+          </div>
+          <div style="height:150px"></div>
+          <div style="position:absolute;bottom:-9px;left:16px;display:flex;gap:14px;background:#0a0d10;padding:0 9px;font-size:11.5px;color:#47555f">
+            <span><span style="color:#8b9aa6">↑↓</span> select</span><span><span style="color:#8b9aa6">⏎</span> open</span><span><span style="color:#8b9aa6">u</span> upload →</span>
+          </div>
+        </div>
+
+        <div style="position:relative;border:1px solid #232c34;border-radius:6px;background:#0c1014;padding:16px 14px 12px">
+          <div style="position:absolute;top:-9px;left:16px;display:flex;align-items:center;gap:8px;background:#0a0d10;padding:0 9px;font-size:12px">
+            <span style="color:#58d6d0;font-weight:700">2</span><span style="color:#cbd5dd;letter-spacing:.1em">remote</span>
+            <span style="color:#3a4750">│</span><span style="color:#5b6b7a">web-02 : /home/matt</span>
+          </div>
+          <div style="display:grid;grid-template-columns:14px 1fr 10ch;gap:5px 12px;font-size:12.5px;align-items:center">
+            <div></div><div style="color:#5b6b7a;letter-spacing:.1em">NAME</div><div style="color:#5b6b7a;letter-spacing:.1em;text-align:right">SIZE</div>
+            <div style="grid-column:1/-1;height:1px;background:#1a2129;margin:3px 0"></div>
+            <div style="color:#47555f">↰</div><div style="color:#5b6b7a">..</div><div></div>
+            <div style="color:#5aa9f0">▸</div><div style="color:#5aa9f0">.ssh/</div><div style="color:#47555f;text-align:right">4 items</div>
+            <div style="color:#5aa9f0">▸</div><div style="color:#5aa9f0">backups/</div><div style="color:#47555f;text-align:right">12 items</div>
+            <div style="color:#5aa9f0">▸</div><div style="color:#5aa9f0">logs/</div><div style="color:#47555f;text-align:right">7 items</div>
+            <div style="color:#5aa9f0">▸</div><div style="color:#5aa9f0">releases/</div><div style="color:#47555f;text-align:right">3 items</div>
+            <div></div><div style="color:#8b9aa6">.bashrc</div><div style="color:#8b9aa6;text-align:right">3.6 KB</div>
+            <div></div><div style="color:#e3bf4d">app-2.14.4.tar.gz</div><div style="color:#e3bf4d;text-align:right">62.0 KB</div>
+            <div></div><div style="color:#cbd5dd">deploy.sh</div><div style="color:#8b9aa6;text-align:right">46 B</div>
+            <div></div><div style="color:#cbd5dd">nginx.conf.bak</div><div style="color:#8b9aa6;text-align:right">1.4 KB</div>
+          </div>
+          <div style="position:absolute;bottom:-9px;left:16px;display:flex;gap:14px;background:#0a0d10;padding:0 9px;font-size:11.5px;color:#47555f">
+            <span><span style="color:#8b9aa6">d</span> download ←</span><span><span style="color:#8b9aa6">m</span> mkdir</span><span><span style="color:#8b9aa6">Del</span> delete</span><span><span style="color:#8b9aa6">⇥</span> switch pane</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="position:relative;border:1px solid #2a3540;border-radius:6px;background:#0c1014;padding:16px 14px 12px">
+        <div style="position:absolute;top:-9px;left:16px;display:flex;align-items:center;gap:8px;background:#0a0d10;padding:0 9px;font-size:12px">
+          <span style="color:#58d6d0;font-weight:700">3</span><span style="color:#cbd5dd;letter-spacing:.1em">transfer</span>
+          <span style="color:#3a4750">│</span><span style="color:#5b6b7a">1 active</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 240px 20ch;gap:14px;align-items:center;font-size:12.5px">
+          <div><span style="color:#35d07f">↑</span> <span style="color:#cbd5dd">app-2.14.4.tar.gz</span> <span style="color:#5b6b7a">→ web-02:/home/matt</span></div>
+          <div style="height:11px;background:#161d24;border-radius:1px;mask-image:repeating-linear-gradient(90deg,#000 0 5px,transparent 5px 7px);-webkit-mask-image:repeating-linear-gradient(90deg,#000 0 5px,transparent 5px 7px)"><div style="width:52%;height:100%;background:#35d07f"></div></div>
+          <div style="color:#8b9aa6;text-align:right">52% · 3.1 MB/s · 6s</div>
+        </div>
+      </div>
+
+      <div style="position:relative;border:1px solid #2a3540;border-radius:6px;background:#0c1014;padding:16px 14px 14px">
+        <div style="position:absolute;top:-9px;left:16px;display:flex;align-items:center;gap:8px;background:#0a0d10;padding:0 9px;font-size:12px">
+          <span style="color:#58d6d0;font-weight:700">4</span><span style="color:#cbd5dd;letter-spacing:.1em">port forwards</span>
+          <span style="color:#3a4750">│</span><span style="color:#5b6b7a">web-02 · 2 rules</span>
+        </div>
+        <div style="display:grid;grid-template-columns:4ch 22ch 20ch 12ch 1fr;gap:6px 16px;font-size:12.5px;align-items:center;white-space:nowrap">
+          <div style="color:#5b6b7a">DIR</div><div style="color:#5b6b7a;letter-spacing:.1em">BIND</div><div style="color:#5b6b7a;letter-spacing:.1em">TARGET</div><div style="color:#5b6b7a;letter-spacing:.1em">STATE</div><div style="color:#5b6b7a;letter-spacing:.1em">LAST CHECK</div>
+          <div style="grid-column:1/-1;height:1px;background:#1a2129;margin:3px 0"></div>
+          <div style="color:#58d6d0">L →</div><div style="color:#cbd5dd">127.0.0.1:8080</div><div style="color:#cbd5dd">localhost:80</div>
+          <div style="display:flex;align-items:center;gap:7px"><span style="color:#ef5f52">●</span><span style="color:#ef5f52">failed</span></div>
+          <div style="color:#8b9aa6;font-size:11.5px">no listener on 8080 — bind refused, 2s ago <span style="color:#5b6b7a">·</span> <span style="color:#58d6d0">r</span> retry</div>
+          <div style="color:#58d6d0">L →</div><div style="color:#cbd5dd">127.0.0.1:15432</div><div style="color:#cbd5dd">db-01:5432</div>
+          <div style="display:flex;align-items:center;gap:7px"><span style="color:#35d07f">●</span><span style="color:#35d07f">active</span></div>
+          <div style="color:#5b6b7a;font-size:11.5px">probed 2s ago · 1 open connection</div>
+        </div>
+        <div style="margin-top:14px;padding:9px 11px;border:1px dashed #232c34;border-radius:4px;display:flex;align-items:center;gap:12px;font-size:12px">
+          <span style="color:#58d6d0">a</span><span style="color:#8b9aa6">add forward</span>
+          <span style="color:#47555f">L 127.0.0.1:PORT → HOST:PORT</span>
+          <span style="color:#3a4750">│</span>
+          <span style="color:#47555f">R HOST:PORT → 127.0.0.1:PORT</span>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ══════════════════════ 6 · HELP ══════════════════════ -->
+    <sc-if value="{{ isHelp }}" hint-placeholder-val="{{ true }}">
+    <div style="padding:20px 16px 8px;display:grid;grid-template-columns:1.25fr 1fr;gap:26px">
+
+      <div style="position:relative;border:1px solid #2a3540;border-radius:6px;background:#0c1014;padding:16px 14px 14px">
+        <div style="position:absolute;top:-9px;left:16px;display:flex;align-items:center;gap:8px;background:#0a0d10;padding:0 9px;font-size:12px">
+          <span style="color:#58d6d0;font-weight:700">1</span><span style="color:#cbd5dd;letter-spacing:.1em">keys</span>
+          <span style="color:#3a4750">│</span><span style="color:#5b6b7a">everything on one screen</span>
+        </div>
+
+        <div style="color:#5b6b7a;font-size:12px;margin-bottom:14px">In the dashboard, single keys. Inside a session, <span style="color:#58d6d0">Ctrl+A</span> first — release, then the key.</div>
+
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px 18px;font-size:12px;margin-bottom:18px">
+          <div style="display:flex;gap:9px"><span style="color:#58d6d0;width:4ch">F1</span><span style="color:#8b9aa6">help</span></div>
+          <div style="display:flex;gap:9px"><span style="color:#58d6d0;width:4ch">F2</span><span style="color:#8b9aa6">monitor</span></div>
+          <div style="display:flex;gap:9px"><span style="color:#58d6d0;width:4ch">F3</span><span style="color:#8b9aa6">files</span></div>
+          <div style="display:flex;gap:9px"><span style="color:#58d6d0;width:4ch">F4</span><span style="color:#8b9aa6">forwards</span></div>
+          <div style="display:flex;gap:9px"><span style="color:#58d6d0;width:4ch">F5</span><span style="color:#8b9aa6">mini strip</span></div>
+          <div style="display:flex;gap:9px"><span style="color:#58d6d0;width:4ch">F9</span><span style="color:#8b9aa6">new session</span></div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:22px">
+          <div>
+            <div style="color:#cbd5dd;font-size:12px;letter-spacing:.1em;margin-bottom:8px">IN A SESSION</div>
+            <div style="display:flex;flex-direction:column;gap:5px;font-size:12px">
+              <div style="display:grid;grid-template-columns:11ch 1fr;gap:10px"><span style="color:#58d6d0">Ctrl+A 1–9</span><span style="color:#8b9aa6">jump to session N</span></div>
+              <div style="display:grid;grid-template-columns:11ch 1fr;gap:10px"><span style="color:#58d6d0">Ctrl+A ←/→</span><span style="color:#8b9aa6">previous / next</span></div>
+              <div style="display:grid;grid-template-columns:11ch 1fr;gap:10px"><span style="color:#58d6d0">Ctrl+A Tab</span><span style="color:#8b9aa6">last session</span></div>
+              <div style="display:grid;grid-template-columns:11ch 1fr;gap:10px"><span style="color:#58d6d0">Ctrl+A M</span><span style="color:#8b9aa6">terminal + monitor split</span></div>
+              <div style="display:grid;grid-template-columns:11ch 1fr;gap:10px"><span style="color:#58d6d0">Ctrl+A m</span><span style="color:#8b9aa6">full-screen monitor</span></div>
+              <div style="display:grid;grid-template-columns:11ch 1fr;gap:10px"><span style="color:#58d6d0">Ctrl+A f</span><span style="color:#8b9aa6">file browser</span></div>
+              <div style="display:grid;grid-template-columns:11ch 1fr;gap:10px"><span style="color:#58d6d0">Ctrl+A p</span><span style="color:#8b9aa6">port forwards</span></div>
+              <div style="display:grid;grid-template-columns:11ch 1fr;gap:10px"><span style="color:#58d6d0">Ctrl+A b</span><span style="color:#8b9aa6">broadcast to a tag</span></div>
+              <div style="display:grid;grid-template-columns:11ch 1fr;gap:10px"><span style="color:#58d6d0">Ctrl+A d</span><span style="color:#8b9aa6">detach, keep it running</span></div>
+              <div style="display:grid;grid-template-columns:11ch 1fr;gap:10px"><span style="color:#58d6d0">Ctrl+A w</span><span style="color:#8b9aa6">close session</span></div>
+            </div>
+          </div>
+          <div>
+            <div style="color:#cbd5dd;font-size:12px;letter-spacing:.1em;margin-bottom:8px">DASHBOARD</div>
+            <div style="display:flex;flex-direction:column;gap:5px;font-size:12px">
+              <div style="display:grid;grid-template-columns:11ch 1fr;gap:10px"><span style="color:#58d6d0">1–4</span><span style="color:#8b9aa6">switch tab</span></div>
+              <div style="display:grid;grid-template-columns:11ch 1fr;gap:10px"><span style="color:#58d6d0">j k ↑ ↓</span><span style="color:#8b9aa6">navigate list</span></div>
+              <div style="display:grid;grid-template-columns:11ch 1fr;gap:10px"><span style="color:#58d6d0">Enter</span><span style="color:#8b9aa6">connect / attach</span></div>
+              <div style="display:grid;grid-template-columns:11ch 1fr;gap:10px"><span style="color:#58d6d0">n</span><span style="color:#8b9aa6">new session here</span></div>
+              <div style="display:grid;grid-template-columns:11ch 1fr;gap:10px"><span style="color:#58d6d0">d</span><span style="color:#8b9aa6">detach session</span></div>
+              <div style="display:grid;grid-template-columns:11ch 1fr;gap:10px"><span style="color:#58d6d0">r</span><span style="color:#8b9aa6">reconnect / retry host</span></div>
+              <div style="display:grid;grid-template-columns:11ch 1fr;gap:10px"><span style="color:#58d6d0">m</span><span style="color:#8b9aa6">monitor selected host</span></div>
+              <div style="display:grid;grid-template-columns:11ch 1fr;gap:10px"><span style="color:#58d6d0">a</span><span style="color:#8b9aa6">add host</span></div>
+              <div style="display:grid;grid-template-columns:11ch 1fr;gap:10px"><span style="color:#58d6d0">e</span><span style="color:#8b9aa6">edit host</span></div>
+              <div style="display:grid;grid-template-columns:11ch 1fr;gap:10px"><span style="color:#58d6d0">/</span><span style="color:#8b9aa6">search hosts</span></div>
+              <div style="display:grid;grid-template-columns:11ch 1fr;gap:10px"><span style="color:#58d6d0">Ctrl+P</span><span style="color:#8b9aa6">command menu</span></div>
+              <div style="display:grid;grid-template-columns:11ch 1fr;gap:10px"><span style="color:#58d6d0">q</span><span style="color:#8b9aa6">quit <span style="color:#47555f">(sessions keep running)</span></span></div>
+            </div>
+          </div>
+        </div>
+        <div style="position:absolute;bottom:-9px;left:16px;display:flex;gap:14px;background:#0a0d10;padding:0 9px;font-size:11.5px;color:#47555f">
+          <span><span style="color:#8b9aa6">/</span> search bindings</span><span><span style="color:#8b9aa6">Esc</span> close</span>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:24px">
+        <div style="border:1px solid #2f4652;border-radius:6px;background:#0e141a;overflow:hidden;box-shadow:0 20px 50px -20px #000">
+          <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid #1a2129;font-size:13px">
+            <span style="color:#58d6d0">❯</span><span style="color:#cbd5dd">db</span><span style="width:1px;height:15px;background:#58d6d0"></span>
+            <span style="margin-left:auto;color:#47555f;font-size:11.5px">5 of 24</span>
+          </div>
+          <div style="padding:6px 0;font-size:12.5px">
+            <div style="display:flex;align-items:center;gap:10px;padding:6px 14px;background:#16212a;border-left:2px solid #58d6d0"><span style="color:#58d6d0">→</span><span style="color:#fff">Attach session 2 — db-01</span><span style="margin-left:auto;color:#5b6b7a;font-size:11.5px">pg_dump</span></div>
+            <div style="display:flex;align-items:center;gap:10px;padding:6px 14px;border-left:2px solid transparent"><span style="color:#47555f">→</span><span style="color:#cbd5dd">Attach session 3 — db-01</span><span style="margin-left:auto;color:#5b6b7a;font-size:11.5px">-bash</span></div>
+            <div style="display:flex;align-items:center;gap:10px;padding:6px 14px;border-left:2px solid transparent"><span style="color:#47555f">+</span><span style="color:#cbd5dd">New session — db-01</span></div>
+            <div style="display:flex;align-items:center;gap:10px;padding:6px 14px;border-left:2px solid transparent"><span style="color:#47555f">+</span><span style="color:#cbd5dd">New session — db-02</span></div>
+            <div style="display:flex;align-items:center;gap:10px;padding:6px 14px;border-left:2px solid transparent"><span style="color:#47555f">◔</span><span style="color:#cbd5dd">Monitor db-01</span><span style="margin-left:auto;color:#e3bf4d;font-size:11.5px">disk 81%</span></div>
+          </div>
+          <div style="padding:9px 14px;border-top:1px solid #1a2129;display:flex;gap:14px;font-size:11.5px;color:#47555f">
+            <span><span style="color:#8b9aa6">⏎</span> run</span><span><span style="color:#8b9aa6">↑↓</span> select</span><span><span style="color:#8b9aa6">Esc</span> dismiss</span>
+          </div>
+        </div>
+
+        <div style="position:relative;border:1px solid #2a3540;border-radius:6px;background:#0c1014;padding:16px 14px 12px">
+          <div style="position:absolute;top:-9px;left:16px;display:flex;align-items:center;gap:8px;background:#0a0d10;padding:0 9px;font-size:12px">
+            <span style="color:#58d6d0;font-weight:700">2</span><span style="color:#cbd5dd;letter-spacing:.1em">config</span>
+            <span style="color:#3a4750">│</span><span style="color:#5b6b7a">~/.essh</span>
+          </div>
+          <div style="display:grid;grid-template-columns:11ch 1fr;gap:6px 14px;font-size:12.5px">
+            <span style="color:#5b6b7a">hosts</span><span style="color:#cbd5dd">config.toml <span style="color:#47555f">· 11 hosts · edited 4h ago</span></span>
+            <span style="color:#5b6b7a">sessions</span><span style="color:#cbd5dd">6 running <span style="color:#47555f">· survive quitting essh</span></span>
+            <span style="color:#5b6b7a">refresh</span><span style="color:#cbd5dd">5s <span style="color:#47555f">· health poll interval</span></span>
+            <span style="color:#5b6b7a">theme</span><span style="color:#cbd5dd">dark</span>
+          </div>
+          <div style="margin-top:12px;color:#5b6b7a;font-size:11.5px">Edits to config.toml reload live — no restart.</div>
+          <div style="position:absolute;bottom:-9px;left:16px;display:flex;gap:14px;background:#0a0d10;padding:0 9px;font-size:11.5px;color:#47555f">
+            <span><span style="color:#8b9aa6">e</span> edit</span><span><span style="color:#8b9aa6">t</span> cycle theme</span><span><span style="color:#8b9aa6">o</span> reveal</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <div style="display:flex;align-items:center;gap:18px;padding:11px 16px;border-top:1px solid #1a2129;background:#0b0f13;font-size:11.5px;margin-top:14px">
+      <span style="color:#47555f"><span style="color:#8b9aa6">⏎</span> attach</span>
+      <span style="color:#47555f"><span style="color:#8b9aa6">n</span> new</span>
+      <span style="color:#47555f"><span style="color:#8b9aa6">d</span> detach</span>
+      <span style="color:#47555f"><span style="color:#8b9aa6">m</span> monitor</span>
+      <span style="color:#47555f"><span style="color:#8b9aa6">/</span> search</span>
+      <span style="color:#47555f"><span style="color:#8b9aa6">F1</span> help</span>
+      <span style="color:#47555f"><span style="color:#8b9aa6">^P</span> menu</span>
+      <span style="color:#47555f"><span style="color:#8b9aa6">q</span> quit</span>
+      <span style="margin-left:auto;color:#3a4750">theme dark · 150×34</span>
+    </div>
+  </div>
+
+  <div style="width:1420px;border:1px solid #232c34;border-radius:6px;background:#0c1014;padding:18px 20px;margin-top:6px">
+    <div style="color:#58d6d0;font-size:11px;letter-spacing:.16em;margin-bottom:12px">WHAT CHANGED FROM V1</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 26px;font-size:12.5px;line-height:1.5">
+      <div><span style="color:#cbd5dd">Config divergence is gone.</span> <span style="color:#8b9aa6">The fleet-consensus screen, the DIVERGE column, groups/agreement and facet verdicts are all removed. Nothing asks you to reason about how hosts differ.</span></div>
+      <div><span style="color:#cbd5dd">Sessions are the landing screen.</span> <span style="color:#8b9aa6">One table: which host, attached or detached, what's running, how long, and its last line of output — so you can tell what a session is doing before attaching.</span></div>
+      <div><span style="color:#cbd5dd">Hosts became a health list.</span> <span style="color:#8b9aa6">Same table, but the columns are session count, cpu, memory, disk and rtt. Offline hosts explain themselves inline and offer retry, instead of leaving blanks.</span></div>
+      <div><span style="color:#cbd5dd">Health leads with problems.</span> <span style="color:#8b9aa6">"Needs attention" names the 3 hosts worth looking at in plain sentences, then cards for those hosts, then busiest processes and reachability. No numbers you have to interpret.</span></div>
+      <div><span style="color:#cbd5dd">Broadcast replaces the fleet tooling.</span> <span style="color:#8b9aa6">One command to a tag, with per-host exit codes — the multi-host action people actually want.</span></div>
+      <div><span style="color:#cbd5dd">Fewer keys, same chrome.</span> <span style="color:#8b9aa6">Ten function keys became six; the keymap fits one screen. btop panels, meters and braille history are unchanged.</span></div>
+    </div>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;initialScreen&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;sessions&quot;,&quot;hosts&quot;,&quot;health&quot;,&quot;terminal&quot;,&quot;files&quot;,&quot;help&quot;],&quot;default&quot;:&quot;sessions&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Demo&quot;}}">
+class Component extends DCLogic {
+  state = { screen: this.props.initialScreen || "sessions" };
+
+  order = ["sessions", "hosts", "health", "terminal", "files", "help"];
+  labels = { sessions: "sessions", hosts: "hosts", health: "health", terminal: "terminal + strip", files: "files + forwards", help: "help" };
+
+  go(s) { this.setState({ screen: s }); }
+
+  step(d) {
+    const i = this.order.indexOf(this.state.screen);
+    this.go(this.order[(i + d + this.order.length) % this.order.length]);
+  }
+
+  renderVals() {
+    const s = this.state.screen;
+    const tab = s === "hosts" ? "hosts" : s === "health" ? "health" : s === "help" ? "config" : "sessions";
+    return {
+      screenLabel: this.labels[s],
+      isSessions: s === "sessions",
+      isHosts: s === "hosts",
+      isHealth: s === "health",
+      isTerminal: s === "terminal",
+      isFiles: s === "files",
+      isHelp: s === "help",
+      tabSessions: tab === "sessions",
+      offSessions: tab !== "sessions",
+      tabHosts: tab === "hosts",
+      offHosts: tab !== "hosts",
+      tabHealth: tab === "health",
+      offHealth: tab !== "health",
+      tabConfig: tab === "config",
+      offConfig: tab !== "config",
+      goSessions: () => this.go("sessions"),
+      goHosts: () => this.go("hosts"),
+      goHealth: () => this.go("health"),
+      goTerminal: () => this.go("terminal"),
+      goFiles: () => this.go("files"),
+      goHelp: () => this.go("help"),
+      prev: () => this.step(-1),
+      next: () => this.step(1)
+    };
+  }
+}
+</script>
+</body>
+</html>
