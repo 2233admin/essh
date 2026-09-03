@@ -943,6 +943,9 @@ async fn tui_main_loop(
         // A connection requested last iteration. The "connecting" frame is now
         // on screen, so it is safe to block here.
         if let Some(host) = tui_state.pending_connect.take() {
+            // `open_session` reports its own failures and never returns Err
+            // for one; anything that does reach here is a bug worth surfacing
+            // rather than a host that would not answer.
             open_session(
                 app,
                 config,
@@ -1105,20 +1108,7 @@ async fn tui_main_loop(
                     if task.is_finished() {
                         if let Ok(results) = task.await {
                             tui_state.fleet_prober.record_probe_results(results);
-                            for host in app.hosts.iter_mut() {
-                                if let Some(state) =
-                                    tui_state.fleet_prober.get_state(&host.hostname, host.port)
-                                {
-                                    if state.result.online {
-                                        host.status = HostStatus::Online;
-                                        host.latency_ms = state.result.latency_ms;
-                                    } else {
-                                        host.status = HostStatus::Offline;
-                                        host.latency_ms = None;
-                                    }
-                                    host.latency_history = state.latency_history.clone();
-                                }
-                            }
+                            apply_probe_state(app, &tui_state.fleet_prober);
                         }
                     } else {
                         tui_state.fleet_probe_task = Some(task);
@@ -1991,7 +1981,7 @@ async fn handle_key_event(
         }
         AppView::Session => handle_session_key(key, app, runtimes).await,
         AppView::Monitor => handle_monitor_key(key, app, config),
-        AppView::PortForwarding => handle_portfwd_key(key, app, config),
+        AppView::PortForwarding => handle_portfwd_key(key, app, config, runtimes).await,
         AppView::FileBrowser => handle_filebrowser_key(key, app, config, runtimes).await,
     }
 }
@@ -2298,10 +2288,11 @@ async fn handle_filebrowser_key(
     Ok(KeyAction::Handled)
 }
 
-fn handle_portfwd_key(
+async fn handle_portfwd_key(
     key: crossterm::event::KeyEvent,
     app: &mut App,
     config: &mut AppConfig,
+    runtimes: &[Option<SessionRuntime>],
 ) -> anyhow::Result<KeyAction> {
     if app.port_forward_adding {
         match key.code {
@@ -2310,29 +2301,47 @@ fn handle_portfwd_key(
                 app.port_forward_input.clear();
             }
             KeyCode::Enter => {
-                if let Some(active_idx) = app.session_manager.active_index {
-                    if let Some((dir, bind_port, target_host, target_port)) =
-                        portfwd::parse_forward_spec(&app.port_forward_input)
-                    {
-                        if let Some(mgr) = app.port_forward_managers.get_mut(active_idx) {
-                            match dir {
-                                portfwd::ForwardDirection::Local => {
-                                    mgr.add_local(
-                                        "127.0.0.1",
-                                        bind_port,
-                                        &target_host,
-                                        target_port,
-                                    );
-                                }
-                                portfwd::ForwardDirection::Remote => {
-                                    mgr.add_remote("0.0.0.0", bind_port, &target_host, target_port);
-                                }
-                            }
-                        }
-                    }
-                }
+                let spec = app.port_forward_input.clone();
                 app.port_forward_adding = false;
                 app.port_forward_input.clear();
+
+                let Some(active_idx) = app.session_manager.active_index else {
+                    app.set_status("No session to forward over.".to_string());
+                    return Ok(KeyAction::Handled);
+                };
+                let Some((dir, bind_port, target_host, target_port)) =
+                    portfwd::parse_forward_spec(&spec)
+                else {
+                    app.set_status(format!("Could not parse `{}` as a forward.", spec));
+                    return Ok(KeyAction::Handled);
+                };
+
+                match dir {
+                    portfwd::ForwardDirection::Local => {
+                        add_local_forward(
+                            app,
+                            runtimes,
+                            active_idx,
+                            bind_port,
+                            &target_host,
+                            target_port,
+                        )
+                        .await;
+                    }
+                    // Refused rather than listed. `tcpip_forward` needs `&mut`
+                    // on the russh handle, which sessions hold behind an
+                    // `Arc`, and incoming channels would land in
+                    // `server_channel_open_forwarded_tcpip`, which currently
+                    // drops them. Both are fixable, and until they are fixed
+                    // the honest answer is no — adding the row was how two
+                    // forwards came to be listed as Active with nothing bound.
+                    portfwd::ForwardDirection::Remote => {
+                        app.set_status(
+                            "Remote (R) forwards are not implemented yet — only local (L)."
+                                .to_string(),
+                        );
+                    }
+                }
             }
             KeyCode::Backspace => {
                 app.port_forward_input.pop();
@@ -2358,6 +2367,15 @@ fn handle_portfwd_key(
                 if let Some(mgr) = app.port_forward_managers.get_mut(active_idx) {
                     if let Some(id) = mgr.selected_id().map(|s| s.to_string()) {
                         mgr.remove(&id);
+                        // Drop the listener with the row. A forward removed
+                        // from the list while its socket stays bound is the
+                        // same class of lie as one listed while unbound.
+                        if let Some(pos) =
+                            app.port_forward_tasks.iter().position(|(i, _, _)| *i == id)
+                        {
+                            let (_, task, _) = app.port_forward_tasks.remove(pos);
+                            task.abort();
+                        }
                     }
                 }
             }
@@ -2376,12 +2394,119 @@ fn handle_portfwd_key(
                 }
             }
         }
+        // A failed forward is worth one keystroke to try again: the usual
+        // cause is a port that was busy a moment ago.
+        KeyCode::Char('r') => {
+            let Some(active_idx) = app.session_manager.active_index else {
+                return Ok(KeyAction::Handled);
+            };
+            let Some(fwd) = app
+                .port_forward_managers
+                .get(active_idx)
+                .and_then(|m| m.selected_id().and_then(|id| m.get(id)))
+                .cloned()
+            else {
+                return Ok(KeyAction::Handled);
+            };
+            if fwd.state.is_active() {
+                app.set_status("That forward is already active.".to_string());
+                return Ok(KeyAction::Handled);
+            }
+            if let Some(mgr) = app.port_forward_managers.get_mut(active_idx) {
+                mgr.remove(&fwd.id);
+            }
+            add_local_forward(
+                app,
+                runtimes,
+                active_idx,
+                fwd.bind_port,
+                &fwd.target_host,
+                fwd.target_port,
+            )
+            .await;
+        }
         KeyCode::Esc => {
             app.view = AppView::Session;
         }
         _ => {}
     }
     Ok(KeyAction::Handled)
+}
+
+/// Bind a local forward and record what actually happened.
+///
+/// The state written here is always the result of a real `bind`, never an
+/// assumption: `Active` means the listener exists, `Failed` carries the OS
+/// error that stopped it.
+async fn add_local_forward(
+    app: &mut App,
+    runtimes: &[Option<SessionRuntime>],
+    session_idx: usize,
+    bind_port: u16,
+    target_host: &str,
+    target_port: u16,
+) {
+    let Some(Some(rt)) = runtimes.get(session_idx) else {
+        app.set_status("That session is not connected.".to_string());
+        return;
+    };
+    let handle = std::sync::Arc::clone(&rt.ssh_session.handle);
+
+    let (id, fwd) = {
+        let Some(mgr) = app.port_forward_managers.get_mut(session_idx) else {
+            return;
+        };
+        let fwd = mgr
+            .add_local("127.0.0.1", bind_port, target_host, target_port)
+            .clone();
+        (fwd.id.clone(), fwd)
+    };
+
+    let counter = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let state =
+        match portfwd::start_local_forward(handle, &fwd, std::sync::Arc::clone(&counter)).await {
+            Ok(task) => {
+                app.port_forward_tasks.push((id.clone(), task, counter));
+                portfwd::ForwardState::Active { connections: 0 }
+            }
+            Err(err) => portfwd::ForwardState::Failed {
+                reason: describe_bind_failure(&err, bind_port),
+            },
+        };
+
+    let message = match &state {
+        portfwd::ForwardState::Active { .. } => {
+            format!(
+                "Forwarding 127.0.0.1:{} → {}:{}",
+                bind_port, target_host, target_port
+            )
+        }
+        portfwd::ForwardState::Failed { reason } => {
+            format!("Forward failed: {}", reason)
+        }
+        portfwd::ForwardState::Starting => String::new(),
+    };
+    if let Some(mgr) = app.port_forward_managers.get_mut(session_idx) {
+        mgr.set_state(&id, state);
+    }
+    app.set_status(message);
+}
+
+/// Turn an `io::Error` from `bind` into something that names the fix.
+///
+/// Kept short on purpose: this lands in a table cell, and a reason that runs
+/// past the panel edge is the clipped add-forward hint all over again. The
+/// retry key is advertised on the panel's bottom rule, so it is not repeated
+/// here.
+fn describe_bind_failure(err: &std::io::Error, port: u16) -> String {
+    let reason = match err.kind() {
+        std::io::ErrorKind::AddrInUse => format!("port {} already in use", port),
+        std::io::ErrorKind::PermissionDenied => {
+            format!("port {} needs root to bind", port)
+        }
+        _ => format!("bind failed: {}", err),
+    };
+    crate::format::truncate_right(&reason, 34)
 }
 
 async fn handle_palette_key(
@@ -2555,7 +2680,10 @@ async fn handle_dashboard_key(
         }
         KeyCode::Char('1') => app.dashboard_tab = DashboardTab::Sessions,
         KeyCode::Char('2') => app.dashboard_tab = DashboardTab::Hosts,
-        KeyCode::Char('3') => app.dashboard_tab = DashboardTab::Fleet,
+        KeyCode::Char('3') => {
+            app.dashboard_tab = DashboardTab::Fleet;
+            app.select_into_fleet_order();
+        }
         KeyCode::Char('4') => app.dashboard_tab = DashboardTab::Config,
         KeyCode::Char('/') => {
             app.search_active = true;
@@ -2604,9 +2732,63 @@ async fn handle_dashboard_key(
             }
         }
         KeyCode::Char('t') => cycle_theme(app, config),
-        KeyCode::Char('r') => {
+        // Probe and reload were one key, `r`, advertised in the footer as
+        // "probe". It reloaded the host list from the cache and the config
+        // file and dropped every measurement, so the fleet read as unreachable
+        // until the next 60s cycle — the footer promised the opposite of what
+        // the key did. They are two actions and now they are three keys.
+        KeyCode::Char('p') => {
+            let Some(host) = app.selected_host().cloned() else {
+                app.set_status("No host selected to probe.".to_string());
+                return Ok(KeyAction::Handled);
+            };
+            if tui_state.fleet_probe_task.is_some() {
+                app.set_status("A probe is already in flight.".to_string());
+                return Ok(KeyAction::Handled);
+            }
+            let timeout = tui_state.fleet_prober.probe_timeout();
+            let target = vec![(host.hostname.clone(), host.port)];
+            tui_state.fleet_probe_task = Some(tokio::spawn(async move {
+                fleet::FleetProber::probe_hosts(target, timeout).await
+            }));
+            app.set_status(format!("Probing {}…", host.name));
+        }
+        KeyCode::Char('P') => {
+            if tui_state.fleet_probe_task.is_some() {
+                app.set_status("A probe is already in flight.".to_string());
+                return Ok(KeyAction::Handled);
+            }
+            let hosts: Vec<(String, u16)> = app
+                .hosts
+                .iter()
+                .map(|h| (h.hostname.clone(), h.port))
+                .collect();
+            if hosts.is_empty() {
+                app.set_status("No hosts to probe.".to_string());
+                return Ok(KeyAction::Handled);
+            }
+            let timeout = tui_state.fleet_prober.probe_timeout();
+            let n = hosts.len();
+            tui_state.fleet_prober.mark_probe_started();
+            tui_state.fleet_probe_task = Some(tokio::spawn(async move {
+                fleet::FleetProber::probe_hosts(hosts, timeout).await
+            }));
+            app.set_status(format!("Probing {}…", crate::format::count(n, "host")));
+        }
+        KeyCode::Char('R') => {
             load_hosts_into_app(app, config)?;
-            app.set_status("Hosts refreshed.".to_string());
+            // The reload rebuilt every row from the cache and the config,
+            // neither of which records reachability. Put the measurements back.
+            apply_probe_state(app, &tui_state.fleet_prober);
+            app.set_status("Config reloaded. Probe results kept.".to_string());
+        }
+        // One release of migration. Doing either action silently is how the
+        // original confusion started.
+        KeyCode::Char('r') => {
+            app.set_status(
+                "`r` is now three keys: p probe host · P probe fleet · R reload config."
+                    .to_string(),
+            );
         }
         KeyCode::Char('d') => {
             // Deleting a host rewrites the user's config file and drops the
@@ -2657,7 +2839,17 @@ async fn handle_dashboard_key(
                     app.view = AppView::Session;
                 }
             } else if let Some(host) = app.selected_host().cloned() {
-                open_session(app, config, audit, &host, runtimes, output_rxs).await?;
+                // Deferred to the next loop iteration, the way the launcher
+                // has always done it: the "Connecting…" frame reaches the
+                // screen before the connect blocks, so a slow or hanging
+                // handshake looks like a slow connect rather than a frozen
+                // program. Connecting inline from the key handler was the
+                // other half of why Enter behaved differently from F9.
+                app.set_status(format!(
+                    "Connecting to {}@{}:{}…",
+                    host.user, host.hostname, host.port
+                ));
+                tui_state.pending_connect = Some(host);
             }
         }
         _ => {}
@@ -3235,7 +3427,87 @@ async fn connect_session_for_host(
     }
 }
 
+/// Open a session, and guarantee it does not end up as a tab that never
+/// connects.
+///
+/// A session row is created before the connection is attempted, so every exit
+/// between that row and `SessionState::Active` has to dispose of it. Two did
+/// not: the `HostKeyStatus::Changed` branch returns `Ok(())` after refusing the
+/// connection, and every `?` between the row and the shell channel — opening
+/// the cache, the TOFU check, `terminal::size`, `open_shell` — leaves through
+/// the same gap. The result was a tab stuck on "Connecting" with a blank pane
+/// and no way out, which is what happened to the one session opened with Enter
+/// from the dashboard while the eight opened with F9 connected in a second.
+///
+/// Rather than patch each exit, the invariant is enforced here: whatever
+/// happens below, a session that is not connected when this returns does not
+/// survive it. A connection failure is also not a reason to bring down the
+/// TUI, so the error is reported and swallowed rather than propagated into the
+/// event loop's `?`.
 async fn open_session(
+    app: &mut App,
+    config: &AppConfig,
+    audit: &AuditLogger,
+    host: &HostDisplay,
+    runtimes: &mut Vec<Option<SessionRuntime>>,
+    output_rxs: &mut Vec<Option<tokio::sync::mpsc::Receiver<Vec<u8>>>>,
+) -> anyhow::Result<()> {
+    let before = app.session_manager.sessions.len();
+    let outcome = open_session_inner(app, config, audit, host, runtimes, output_rxs).await;
+    let failure = outcome.as_ref().err().map(|e| e.to_string());
+    discard_unconnected_sessions(app, runtimes, output_rxs, before, failure.as_deref());
+    Ok(())
+}
+
+/// Drop any session added at or after `from` that never reached `Active`.
+///
+/// `reason` is `Some` only when the attempt ended in an error nobody has
+/// reported yet; the paths that refuse a connection deliberately — a changed
+/// host key, most of all — have already put a better message on screen and
+/// must not have it overwritten by a generic one.
+fn discard_unconnected_sessions(
+    app: &mut App,
+    runtimes: &mut Vec<Option<SessionRuntime>>,
+    output_rxs: &mut Vec<Option<tokio::sync::mpsc::Receiver<Vec<u8>>>>,
+    from: usize,
+    reason: Option<&str>,
+) {
+    let mut discarded = false;
+    for idx in (from..app.session_manager.sessions.len()).rev() {
+        let unfinished = matches!(
+            app.session_manager.sessions[idx].state,
+            SessionState::Connecting
+        );
+        if !unfinished {
+            continue;
+        }
+        app.session_manager.remove_session(idx);
+        app.remove_session_tracking(idx);
+        if idx < runtimes.len() {
+            runtimes.remove(idx);
+        }
+        if idx < output_rxs.len() {
+            output_rxs.remove(idx);
+        }
+        discarded = true;
+    }
+
+    if !discarded {
+        return;
+    }
+
+    app.clamp_session_row();
+    app.view = if app.session_manager.has_sessions() {
+        AppView::Session
+    } else {
+        AppView::Dashboard
+    };
+    if let Some(reason) = reason {
+        app.set_status(format!("Connection failed: {}", reason));
+    }
+}
+
+async fn open_session_inner(
     app: &mut App,
     config: &AppConfig,
     audit: &AuditLogger,
@@ -4297,6 +4569,30 @@ fn select_host(app: &mut App, hostname: &str, port: u16) {
     }
 }
 
+/// Copy live probe state onto the host list.
+///
+/// Reachability and RTT are measured by the prober and held in `TuiState`;
+/// `load_hosts_into_app` rebuilds every `HostDisplay` from the cache and the
+/// config file, where neither is recorded. Without this the list comes back
+/// with `status: NeverProbed` and an empty history — which is what made `r`
+/// look like it had knocked the whole fleet offline until the next 60s cycle.
+/// Reloading the config is not evidence about reachability, so it must not
+/// overwrite the evidence we have.
+fn apply_probe_state(app: &mut App, prober: &fleet::FleetProber) {
+    for host in app.hosts.iter_mut() {
+        if let Some(state) = prober.get_state(&host.hostname, host.port) {
+            if state.result.online {
+                host.status = HostStatus::Online;
+                host.latency_ms = state.result.latency_ms;
+            } else {
+                host.status = HostStatus::Offline;
+                host.latency_ms = None;
+            }
+            host.latency_history = state.latency_history.clone();
+        }
+    }
+}
+
 fn load_hosts_into_app(app: &mut App, config: &AppConfig) -> anyhow::Result<()> {
     let mut displays = Vec::new();
 
@@ -4742,6 +5038,98 @@ mod tests {
     use ssh_key::rand_core::OsRng;
     use ssh_key::{Algorithm, LineEnding, PrivateKey};
     use tempfile::NamedTempFile;
+
+    /// The tab that never connects.
+    ///
+    /// v0.3.3 could leave a session in `Connecting` forever — a blank pane
+    /// with no shell, no retry and no way out. Every exit between creating the
+    /// row and reaching `Active` has to dispose of it, and the point of
+    /// `discard_unconnected_sessions` is that it does not matter which exit
+    /// was taken.
+    #[test]
+    fn a_session_that_never_connected_does_not_survive_the_attempt() {
+        let mut app = App::new(8);
+        let mut runtimes: Vec<Option<SessionRuntime>> = Vec::new();
+        let mut output_rxs: Vec<Option<tokio::sync::mpsc::Receiver<Vec<u8>>>> = Vec::new();
+
+        let before = app.session_manager.sessions.len();
+        let session = Session::new(
+            "id-1".into(),
+            "web-02".into(),
+            "127.0.0.12".into(),
+            2222,
+            "matt".into(),
+            1000,
+        );
+        app.session_manager.add_session(session).expect("add");
+        app.add_session_tracking(60);
+        assert!(matches!(
+            app.session_manager.sessions[before].state,
+            SessionState::Connecting
+        ));
+
+        // The host-key-changed branch: refuses, states why, returns Ok.
+        discard_unconnected_sessions(&mut app, &mut runtimes, &mut output_rxs, before, None);
+
+        assert_eq!(
+            app.session_manager.sessions.len(),
+            before,
+            "a session stuck on Connecting was left in the list"
+        );
+    }
+
+    #[test]
+    fn a_connected_session_is_left_alone() {
+        let mut app = App::new(8);
+        let mut runtimes: Vec<Option<SessionRuntime>> = Vec::new();
+        let mut output_rxs: Vec<Option<tokio::sync::mpsc::Receiver<Vec<u8>>>> = Vec::new();
+
+        let session = Session::new(
+            "id-1".into(),
+            "web-02".into(),
+            "127.0.0.12".into(),
+            2222,
+            "matt".into(),
+            1000,
+        );
+        app.session_manager.add_session(session).expect("add");
+        app.add_session_tracking(60);
+        app.session_manager.sessions[0].state = SessionState::Active;
+
+        discard_unconnected_sessions(&mut app, &mut runtimes, &mut output_rxs, 0, None);
+
+        assert_eq!(app.session_manager.sessions.len(), 1);
+    }
+
+    /// A failure that nobody else reported gets reported here.
+    #[test]
+    fn a_failed_attempt_says_what_happened() {
+        let mut app = App::new(8);
+        let mut runtimes: Vec<Option<SessionRuntime>> = Vec::new();
+        let mut output_rxs: Vec<Option<tokio::sync::mpsc::Receiver<Vec<u8>>>> = Vec::new();
+
+        let session = Session::new(
+            "id-1".into(),
+            "web-02".into(),
+            "127.0.0.12".into(),
+            2222,
+            "matt".into(),
+            1000,
+        );
+        app.session_manager.add_session(session).expect("add");
+        app.add_session_tracking(60);
+
+        discard_unconnected_sessions(
+            &mut app,
+            &mut runtimes,
+            &mut output_rxs,
+            0,
+            Some("could not open a shell"),
+        );
+
+        let status = app.status_message.clone().expect("a status was set");
+        assert!(status.contains("could not open a shell"), "{}", status);
+    }
 
     fn write_test_key(encrypted: bool) -> NamedTempFile {
         let file = NamedTempFile::new().expect("create temp key file");

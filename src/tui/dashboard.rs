@@ -102,6 +102,7 @@ pub fn render(
             fleet_consensus,
             facet_agreement,
             verdicts,
+            selected_host,
             theme,
         ),
         super::DashboardTab::Config => render_config_tab(f, chunks[1], theme),
@@ -363,7 +364,8 @@ fn render_verdict_box(
     f: &mut Frame,
     area: Rect,
     verdicts: &[(String, crate::divergence::Verdict)],
-    total_hosts: usize,
+    comparable: usize,
+    unprobed: usize,
     theme: &Theme,
 ) {
     let inner = d::pane(
@@ -379,18 +381,32 @@ fn render_verdict_box(
 
     let mut lines: Vec<Line> = Vec::new();
 
-    // Only claim concentration when it is true and worth saying.
-    if verdicts.len() >= 2 && total_hosts > verdicts.len() {
-        lines.push(Line::from(Span::styled(
+    // Only claim concentration when it is true and worth saying — and count
+    // it against the hosts that were actually compared. Counting every host
+    // made "2 of 10 hold every outlier" out of a fleet where seven were never
+    // probed, which reads as eight hosts being fine. Unprobed is unknown, not
+    // agreement (SPEC.md §1), so it is stated separately.
+    if verdicts.len() >= 2 && comparable > verdicts.len() {
+        let mut spans = vec![Span::styled(
             format!(
-                "{} of {} hosts hold every outlier.",
+                "{} of {} comparable hosts hold every outlier.",
                 verdicts.len(),
-                total_hosts
+                comparable
             ),
             Style::default()
                 .fg(theme.text_primary)
                 .add_modifier(Modifier::BOLD),
-        )));
+        )];
+        if unprobed > 0 {
+            spans.push(Span::styled(
+                format!(
+                    "  {} unprobed, excluded",
+                    crate::format::count(unprobed, "host")
+                ),
+                Style::default().fg(theme.text_muted),
+            ));
+        }
+        lines.push(Line::from(spans));
     }
 
     for (host, v) in verdicts.iter().take(inner.height as usize) {
@@ -607,14 +623,19 @@ fn render_groups_panel(
             } else {
                 1.0 - (g.at_consensus as f64 / probed as f64)
             };
+            // A ratio is a claim that one side won. Print it only when a
+            // majority exists to have won: `1 / 2` on a 1-1 split is the
+            // arbitrary tie-break rendered as a finding.
             let col = if probed == 0 {
                 theme.border
+            } else if !g.has_majority() {
+                theme.status_warn
             } else if severity > 0.0 {
                 theme.ramp_divergence(severity)
             } else {
                 theme.status_good
             };
-            let consensus = if probed == 0 {
+            let consensus = if probed == 0 || !g.has_majority() {
                 "—".to_string()
             } else {
                 format!("{} / {}", g.at_consensus, probed)
@@ -657,6 +678,7 @@ fn render_fleet_tab(
     fleet_consensus: Option<(String, crate::divergence::Consensus)>,
     facet_agreement: &[(String, f64)],
     verdicts: &[(String, crate::divergence::Verdict)],
+    selected: usize,
     theme: &Theme,
 ) {
     let _ = (sessions, theme);
@@ -700,9 +722,17 @@ fn render_fleet_tab(
 
     render_consensus_box(f, rows[0], hosts, &fleet_consensus, facet_agreement, theme);
     if verdict_height > 0 {
-        render_verdict_box(f, rows[1], verdicts, hosts.len(), theme);
+        let unprobed = hosts.iter().filter(|h| h.diverge_count.is_none()).count();
+        render_verdict_box(
+            f,
+            rows[1],
+            verdicts,
+            hosts.len() - unprobed,
+            unprobed,
+            theme,
+        );
     }
-    render_fleet_table(f, rows[2], hosts, theme);
+    render_fleet_table(f, rows[2], hosts, selected, theme);
 }
 
 /// The CONSENSUS box: a 26px numeral in the design, the biggest thing a
@@ -850,15 +880,32 @@ fn render_consensus_box(
             .iter()
             .take(shown)
             .map(|(label, frac)| {
-                // Full agreement is the boring case and should recede; a
-                // column of bright bars at 100% reads as a solid block and
-                // buries the one facet that actually diverges.
-                let col = if *frac >= 1.0 {
+                let agrees = *frac >= 1.0;
+
+                // SPEC.md §2.1: agreement needs no graphic. Dimming the bar
+                // was not enough — a grid of full-width bars in adjacent rows
+                // merges into one solid rectangle whatever colour it is, and
+                // the facet that actually diverges is the one short bar lost
+                // inside it. So a facet at 100% gets its number and nothing
+                // else, and the meters that remain are all divergence.
+                //
+                // Severity by shortfall, not by a ramp read at `1 - frac`:
+                // that put 86% agreement near the ramp's cold end, so the
+                // diverging facets rendered quieter than the agreeing ones.
+                let col = if agrees {
                     theme.muted_good
+                } else if *frac < 0.6 {
+                    theme.status_error
                 } else {
-                    theme.ramp_divergence(1.0 - frac)
+                    theme.status_warn
                 };
-                let (fill, track) = d::meter(*frac, meter_w);
+
+                let (fill, track) = if agrees {
+                    (String::new(), " ".repeat(meter_w))
+                } else {
+                    d::meter(*frac, meter_w)
+                };
+
                 vec![
                     Span::styled(
                         format!(
@@ -867,7 +914,7 @@ fn render_consensus_box(
                             w = label_w
                         ),
                         // A diverging facet's name is the thing to read.
-                        Style::default().fg(if *frac >= 1.0 {
+                        Style::default().fg(if agrees {
                             theme.border
                         } else {
                             theme.text_primary
@@ -897,7 +944,13 @@ fn render_consensus_box(
 }
 
 /// HOSTS BY DIVERGENCE, sorted worst first.
-fn render_fleet_table(f: &mut Frame, area: Rect, hosts: &[super::HostDisplay], theme: &Theme) {
+fn render_fleet_table(
+    f: &mut Frame,
+    area: Rect,
+    hosts: &[super::HostDisplay],
+    selected: usize,
+    theme: &Theme,
+) {
     let inner = d::pane(
         f,
         area,
@@ -911,14 +964,8 @@ fn render_fleet_table(f: &mut Frame, area: Rect, hosts: &[super::HostDisplay], t
         },
     );
 
-    let mut ordered: Vec<&super::HostDisplay> = hosts.iter().collect();
-    ordered.sort_by(|a, b| match (a.diverge_count, b.diverge_count) {
-        (Some(x), Some(y)) => y.cmp(&x),
-        // Unprobed hosts sink to the bottom: they are not "in agreement".
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => a.name.cmp(&b.name),
-    });
+    // The same order the cursor walks — one definition, in `tui::fleet_order_of`.
+    let order = super::fleet_order_of(hosts);
 
     let header = Row::new(vec![
         Cell::from(""),
@@ -928,58 +975,82 @@ fn render_fleet_table(f: &mut Frame, area: Rect, hosts: &[super::HostDisplay], t
         Cell::from(d::header_cell("60s", false, theme)),
     ]);
 
-    let at_consensus = ordered
-        .iter()
-        .filter(|h| h.diverge_count == Some(0))
-        .count();
+    let at_consensus = hosts.iter().filter(|h| h.diverge_count == Some(0)).count();
 
-    let body: Vec<Row> = ordered
+    let body: Vec<Row> = order
         .iter()
-        .filter(|h| h.diverge_count != Some(0))
         .take(inner.height.saturating_sub(2) as usize)
-        .map(|h| match h.diverge_count {
-            // Never probed: one honest line, not a row of dashes.
-            None => Row::new(vec![
-                Cell::from(Line::from(d::dot(theme.absent))),
-                Cell::from(h.name.clone()).style(Style::default().fg(theme.text_secondary)),
-                Cell::from(d::none_line("never probed — no facts to compare", theme)),
-                Cell::from(""),
-                Cell::from(""),
-            ]),
-            Some(n) => {
-                let col = theme.divergence_count(n);
-                let spark = if h.latency_history.is_empty() {
-                    Span::raw("")
-                } else {
-                    let ceiling = d::axis_ceiling(&h.latency_history);
-                    Span::styled(
-                        d::sparkline(&h.latency_history, 12, ceiling),
-                        Style::default().fg(theme.muted_good),
-                    )
-                };
-                Row::new(vec![
-                    Cell::from(Line::from(d::dot(col))),
-                    Cell::from(h.name.clone()).style(Style::default().fg(theme.text_emphasis)),
-                    Cell::from(
-                        Line::from(Span::styled(n.to_string(), Style::default().fg(col)))
+        .map(|&i| {
+            let h = &hosts[i];
+            // A cursor with no marker is the defect this panel shipped with:
+            // arrows moved a selection the screen never showed, and `D` then
+            // opened whichever host that invisible index had landed on.
+            let selected_row = i == selected;
+            let marker = if selected_row { "▌" } else { " " };
+            let name_style = if selected_row {
+                Style::default()
+                    .fg(theme.text_emphasis)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.text_emphasis)
+            };
+
+            let row = match h.diverge_count {
+                // Never probed: one honest line, not a row of dashes.
+                None => Row::new(vec![
+                    Cell::from(Line::from(vec![
+                        Span::styled(marker, Style::default().fg(theme.brand)),
+                        d::dot(theme.absent),
+                    ])),
+                    Cell::from(h.name.clone()).style(Style::default().fg(theme.text_secondary)),
+                    Cell::from(d::none_line("never probed — no facts to compare", theme)),
+                    Cell::from(""),
+                    Cell::from(""),
+                ]),
+                Some(n) => {
+                    let col = theme.divergence_count(n);
+                    let spark = if h.latency_history.is_empty() {
+                        Span::raw("")
+                    } else {
+                        let ceiling = d::axis_ceiling(&h.latency_history);
+                        Span::styled(
+                            d::sparkline(&h.latency_history, 12, ceiling),
+                            Style::default().fg(theme.muted_good),
+                        )
+                    };
+                    Row::new(vec![
+                        Cell::from(Line::from(vec![
+                            Span::styled(marker, Style::default().fg(theme.brand)),
+                            d::dot(col),
+                        ])),
+                        Cell::from(h.name.clone()).style(name_style),
+                        Cell::from(
+                            Line::from(Span::styled(n.to_string(), Style::default().fg(col)))
+                                .right_aligned(),
+                        ),
+                        Cell::from(
+                            Line::from(match h.latency_ms {
+                                Some(ms) => format!("{:.0}ms", ms),
+                                None => "—".into(),
+                            })
                             .right_aligned(),
-                    ),
-                    Cell::from(
-                        Line::from(match h.latency_ms {
-                            Some(ms) => format!("{:.0}ms", ms),
-                            None => "—".into(),
-                        })
-                        .right_aligned(),
-                    )
-                    .style(Style::default().fg(theme.text_secondary)),
-                    Cell::from(Line::from(spark)),
-                ])
+                        )
+                        .style(Style::default().fg(theme.text_secondary)),
+                        Cell::from(Line::from(spark)),
+                    ])
+                }
+            };
+
+            if selected_row {
+                row.style(Style::default().bg(theme.selection_bg))
+            } else {
+                row
             }
         })
         .collect();
 
     let widths = [
-        Constraint::Length(2),
+        Constraint::Length(3),
         Constraint::Percentage(28),
         Constraint::Length(12),
         Constraint::Length(10),
@@ -1001,13 +1072,13 @@ fn render_fleet_table(f: &mut Frame, area: Rect, hosts: &[super::HostDisplay], t
         f.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(
-                    at_consensus.to_string(),
+                    crate::format::count(at_consensus, "host"),
                     Style::default()
                         .fg(theme.status_good)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    " hosts at full consensus",
+                    " at full consensus",
                     Style::default().fg(theme.text_secondary),
                 ),
             ])),
@@ -1092,7 +1163,8 @@ fn render_footer(
         super::DashboardTab::Fleet => &[
             ("⏎", "connect"),
             ("D", "divergence"),
-            ("r", "probe all"),
+            ("P", "probe fleet"),
+            ("R", "reload"),
             ("^P", "palette"),
             ("q", "quit"),
         ],
@@ -1101,8 +1173,9 @@ fn render_footer(
             ("D", "divergence"),
             ("/", "search"),
             ("a", "add"),
-            ("r", "probe"),
-            ("e", "edit"),
+            ("p", "probe"),
+            ("P", "probe fleet"),
+            ("R", "reload"),
             ("^P", "palette"),
             ("q", "quit"),
         ],
@@ -1228,7 +1301,7 @@ mod fleet_tests {
         let mut term = Terminal::new(TestBackend::new(width, height)).unwrap();
         let agreement = facets(n);
         term.draw(|f| {
-            render_fleet_tab(f, f.area(), &[], &[], None, &agreement, &[], &theme);
+            render_fleet_tab(f, f.area(), &[], &[], None, &agreement, &[], 0, &theme);
         })
         .unwrap();
         let buf = term.backend().buffer();
@@ -1306,7 +1379,17 @@ mod fleet_tests {
         let agreement = facets(4);
         let mut term = Terminal::new(TestBackend::new(160, 40)).unwrap();
         term.draw(|f| {
-            render_fleet_tab(f, f.area(), &[], &[], None, &agreement, &verdicts, &theme);
+            render_fleet_tab(
+                f,
+                f.area(),
+                &[],
+                &[],
+                None,
+                &agreement,
+                &verdicts,
+                0,
+                &theme,
+            );
         })
         .unwrap();
         let buf = term.backend().buffer();
@@ -1334,13 +1417,89 @@ mod fleet_tests {
 
     /// With nothing diverging there is nothing to reason about, and the panel
     /// must not appear as an empty box.
+    fn groups_screen(groups: &[crate::divergence::GroupSummary]) -> String {
+        let theme = crate::theme::dark();
+        let mut term = Terminal::new(TestBackend::new(120, 12)).unwrap();
+        term.draw(|f| render_groups_panel(f, f.area(), groups, &theme))
+            .unwrap();
+        let buf = term.backend().buffer();
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol().chars().next().unwrap_or(' '))
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn group(
+        label: &str,
+        hosts: usize,
+        at: usize,
+        unprobed: usize,
+    ) -> crate::divergence::GroupSummary {
+        crate::divergence::GroupSummary {
+            label: label.into(),
+            host_count: hosts,
+            at_consensus: at,
+            unprobed,
+            breakers: Vec::new(),
+            distinct_values: 1,
+            tied_facets: 0,
+        }
+    }
+
+    /// The `role=web` row from the v0.3.3 dashboard printed "2 / 2 2 / 2 full
+    /// consensus": the AT CONSENSUS column drew the ratio, and `note()` drew
+    /// it again.
+    #[test]
+    fn a_consensus_ratio_is_printed_exactly_once() {
+        let s = groups_screen(&[group("role=web", 4, 2, 2)]);
+        let row = s
+            .lines()
+            .find(|l| l.contains("role=web"))
+            .expect("the group row renders")
+            .to_string();
+
+        assert_eq!(
+            row.matches("2 / 2").count(),
+            1,
+            "the ratio is printed twice:\n{row}"
+        );
+        assert!(row.contains("full consensus"), "{row}");
+        assert!(
+            row.contains("2 unprobed, excluded"),
+            "the exclusion has to be stated, not implied:\n{row}"
+        );
+    }
+
+    /// Two hosts holding two values is a disagreement, not a winner and a
+    /// loser. v0.3.3 printed `1 / 2` and picked the winner by string order.
+    #[test]
+    fn a_group_with_no_majority_shows_no_ratio() {
+        let mut g = group("role=db", 2, 0, 0);
+        g.tied_facets = 1;
+        g.distinct_values = 2;
+        let s = groups_screen(&[g]);
+        let row = s
+            .lines()
+            .find(|l| l.contains("role=db"))
+            .expect("the group row renders")
+            .to_string();
+
+        assert!(row.contains('—'), "no em dash for the absent ratio:\n{row}");
+        assert!(!row.contains("1 / 2"), "a ratio implying a winner:\n{row}");
+        assert!(row.contains("no majority"), "{row}");
+    }
+
     #[test]
     fn a_fleet_at_consensus_shows_no_verdict_box() {
         let theme = crate::theme::dark();
         let agreement = facets(4);
         let mut term = Terminal::new(TestBackend::new(160, 40)).unwrap();
         term.draw(|f| {
-            render_fleet_tab(f, f.area(), &[], &[], None, &agreement, &[], &theme);
+            render_fleet_tab(f, f.area(), &[], &[], None, &agreement, &[], 0, &theme);
         })
         .unwrap();
         let buf = term.backend().buffer();
@@ -1355,6 +1514,62 @@ mod fleet_tests {
         assert!(
             !screen.contains("verdict"),
             "empty verdict box drawn:\n{screen}"
+        );
+    }
+
+    /// SPEC.md §2.1 — agreement needs no graphic.
+    ///
+    /// Dimming the 100% bars was the earlier mitigation and it did not work:
+    /// full-width bars in adjacent rows merge into a solid rectangle whatever
+    /// colour they are, and the short bar that is the actual finding gets lost
+    /// inside it.
+    #[test]
+    fn a_facet_at_full_agreement_draws_no_meter() {
+        let agreement = vec![
+            ("listening ports".to_string(), 0.57),
+            ("timezone".to_string(), 0.86),
+            ("kernel".to_string(), 1.0),
+            ("os release".to_string(), 1.0),
+        ];
+        let theme = crate::theme::dark();
+        let mut term = Terminal::new(TestBackend::new(160, 40)).unwrap();
+        term.draw(|f| {
+            render_fleet_tab(f, f.area(), &[], &[], None, &agreement, &[], 0, &theme);
+        })
+        .unwrap();
+        let buf = term.backend().buffer();
+
+        // Count meter cells inside each facet's own cell — four facets share a
+        // row, so counting the whole line credits one facet's bar to another.
+        // A cell runs from the end of its label to its percentage.
+        let mut bars_on: std::collections::HashMap<String, usize> = Default::default();
+        for y in 0..buf.area.height {
+            let line: String = (0..buf.area.width)
+                .map(|x| buf[(x, y)].symbol().chars().next().unwrap_or(' '))
+                .collect();
+            for name in ["listening ports", "timezone", "kernel", "os release"] {
+                let Some(start) = line.find(name) else {
+                    continue;
+                };
+                let after = &line[start + name.len()..];
+                let end = after.find('%').map(|i| i + 1).unwrap_or(after.len());
+                *bars_on.entry(name.to_string()).or_default() += after[..end].matches('█').count();
+            }
+        }
+
+        assert_eq!(
+            bars_on.get("kernel").copied().unwrap_or(0),
+            0,
+            "a facet at 100% drew a meter"
+        );
+        assert_eq!(
+            bars_on.get("os release").copied().unwrap_or(0),
+            0,
+            "a facet at 100% drew a meter"
+        );
+        assert!(
+            bars_on.get("listening ports").copied().unwrap_or(0) > 0,
+            "a diverging facet drew no meter"
         );
     }
 

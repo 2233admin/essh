@@ -216,6 +216,16 @@ pub struct App {
     pub port_forward_managers: Vec<PortForwardManager>,
     pub port_forward_input: String,
     pub port_forward_adding: bool,
+    /// The listener tasks behind the active forwards, by forward id.
+    ///
+    /// Held so a deleted forward can have its port released: aborting the task
+    /// drops the `TcpListener`. Without this the row disappears and the port
+    /// stays bound, which is the "Active" lie inverted.
+    pub port_forward_tasks: Vec<(
+        String,
+        tokio::task::JoinHandle<()>,
+        std::sync::Arc<std::sync::atomic::AtomicU64>,
+    )>,
     // File browser
     pub file_browser: Option<FileBrowser>,
     // Command palette
@@ -234,6 +244,27 @@ pub struct App {
     pub host_platforms: std::collections::HashMap<String, crate::monitor::Platform>,
     /// Peer sets derived from host tags, largest first.
     pub peer_sets: Vec<crate::divergence::PeerSet>,
+}
+
+/// Host indices in the order the FLEET table draws them.
+///
+/// One definition, used by the renderer and by the cursor, because the defect
+/// was that they disagreed.
+pub fn fleet_order_of(hosts: &[HostDisplay]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..hosts.len())
+        .filter(|&i| hosts[i].diverge_count != Some(0))
+        .collect();
+    order.sort_by(|&a, &b| {
+        let (x, y) = (&hosts[a], &hosts[b]);
+        match (x.diverge_count, y.diverge_count) {
+            (Some(p), Some(q)) => q.cmp(&p),
+            // Unprobed hosts sink to the bottom: they are not "in agreement".
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => x.name.cmp(&y.name),
+        }
+    });
+    order
 }
 
 impl App {
@@ -277,6 +308,7 @@ impl App {
             session_net_tx_history: Vec::new(),
             notifications: Vec::new(),
             port_forward_managers: Vec::new(),
+            port_forward_tasks: Vec::new(),
             port_forward_input: String::new(),
             port_forward_adding: false,
             file_browser: None,
@@ -520,7 +552,29 @@ impl App {
     }
 
     pub fn set_hosts(&mut self, hosts: Vec<HostDisplay>) {
+        // Follow the host, not the index.
+        //
+        // A reload rebuilds the list from the cache first and the config file
+        // second, so a host that has been connected to moves to the front and
+        // every index after it means a different machine. Keeping the number
+        // left the cursor pointing at whatever had shifted into that slot —
+        // and the next Enter connects to "the selected host".
+        let anchor = self
+            .hosts
+            .get(self.selected_host)
+            .map(|h| (h.hostname.clone(), h.port));
+
         self.hosts = hosts;
+
+        if let Some((hostname, port)) = anchor {
+            if let Some(i) = self
+                .hosts
+                .iter()
+                .position(|h| h.hostname == hostname && h.port == port)
+            {
+                self.selected_host = i;
+            }
+        }
         if self.selected_host >= self.hosts.len() {
             self.selected_host = 0;
         }
@@ -556,8 +610,45 @@ impl App {
         self.hosts.get(self.selected_host)
     }
 
+    /// Host indices in the order the FLEET table draws them.
+    ///
+    /// Sorted by divergence, hosts at consensus left out — the panel is a list
+    /// of outliers. Shared with the renderer so the cursor walks the rows the
+    /// screen shows. It used to walk the configured order against a table
+    /// sorted by divergence, so `Down` moved the (invisible) selection
+    /// somewhere unrelated to the row under it, and `D` opened the divergence
+    /// view for a host the user had not pointed at. The Sessions tab had the
+    /// same defect and it was fixed the same way.
+    pub fn fleet_order(&self) -> Vec<usize> {
+        fleet_order_of(&self.hosts)
+    }
+
+    /// Put the cursor on a row the FLEET panel actually draws.
+    ///
+    /// The panel lists outliers, so a host at consensus has no row. Arriving
+    /// on the tab with one selected left the marker nowhere and the first
+    /// arrow key jumping somewhere unrelated. Landing on the worst offender
+    /// is also where the eye goes first.
+    pub fn select_into_fleet_order(&mut self) {
+        let order = self.fleet_order();
+        if !order.contains(&self.selected_host) {
+            if let Some(&first) = order.first() {
+                self.selected_host = first;
+                self.table_state.select(Some(first));
+            }
+        }
+    }
+
+    /// The rows the cursor can land on, for whichever tab is on screen.
+    fn navigable_hosts(&self) -> Vec<usize> {
+        match self.dashboard_tab {
+            DashboardTab::Fleet => self.fleet_order(),
+            _ => self.filtered_host_indices(),
+        }
+    }
+
     pub fn next_host(&mut self) {
-        let indices = self.filtered_host_indices();
+        let indices = self.navigable_hosts();
         if indices.is_empty() {
             return;
         }
@@ -571,7 +662,7 @@ impl App {
     }
 
     pub fn prev_host(&mut self) {
-        let indices = self.filtered_host_indices();
+        let indices = self.navigable_hosts();
         if indices.is_empty() {
             return;
         }
@@ -1491,6 +1582,102 @@ mod render_smoke {
 #[cfg(test)]
 mod search_selection_tests {
     use super::*;
+
+    /// The defect the demo tape had to work around with "three presses, not
+    /// one": the FLEET table sorts by divergence, the cursor walked the
+    /// configured order, and the table drew no selection at all, so `D` opened
+    /// the divergence view for a host nobody had pointed at.
+    #[test]
+    fn the_fleet_cursor_walks_the_rows_the_fleet_table_draws() {
+        let mut app = app_with_hosts();
+        // Configured order and divergence order deliberately disagree.
+        let mut extra = app.hosts[0].clone();
+        extra.name = "edge-01".into();
+        extra.hostname = "10.0.0.3".into();
+        app.hosts.push(extra.clone());
+        extra.name = "staging-web-01".into();
+        extra.hostname = "10.0.0.4".into();
+        app.hosts.push(extra);
+
+        app.hosts[0].diverge_count = Some(0);
+        app.hosts[1].diverge_count = Some(1);
+        app.hosts[2].diverge_count = Some(3);
+        app.hosts[3].diverge_count = None;
+        app.dashboard_tab = DashboardTab::Fleet;
+
+        let order = app.fleet_order();
+        let names: Vec<&str> = order.iter().map(|&i| app.hosts[i].name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                app.hosts[2].name.as_str(),
+                app.hosts[1].name.as_str(),
+                app.hosts[3].name.as_str()
+            ],
+            "worst first, unprobed last, at-consensus not listed"
+        );
+
+        // The cursor visits those rows, in that order, and nothing else.
+        app.selected_host = order[0];
+        let mut visited = vec![app.selected_host];
+        for _ in 0..order.len() - 1 {
+            app.next_host();
+            visited.push(app.selected_host);
+        }
+        assert_eq!(visited, order, "the cursor left the drawn rows");
+
+        // And it never lands on a host the panel does not draw.
+        app.next_host();
+        assert_eq!(app.selected_host, order[0], "wrapped past the last row");
+        assert_ne!(
+            app.selected_host, 0,
+            "landed on the at-consensus host, which has no row"
+        );
+    }
+
+    /// A reload rebuilds the list cache-first, so indices shift under the
+    /// cursor. Pressing `R` used to move the selection to a different machine,
+    /// and the next Enter would connect to it.
+    #[test]
+    fn a_reload_keeps_the_cursor_on_the_same_host() {
+        let mut app = app_with_hosts();
+        app.selected_host = 1;
+        let want = app.hosts[1].hostname.clone();
+
+        // The same hosts, in the order a reload produces them.
+        let mut reordered = app.hosts.clone();
+        reordered.reverse();
+        app.set_hosts(reordered);
+
+        assert_eq!(
+            app.hosts[app.selected_host].hostname, want,
+            "the cursor followed the index instead of the host"
+        );
+    }
+
+    /// A host that is gone after the reload cannot keep the cursor.
+    #[test]
+    fn a_reload_that_drops_the_selected_host_falls_back() {
+        let mut app = app_with_hosts();
+        app.selected_host = 1;
+        let survivor = app.hosts[0].clone();
+        app.set_hosts(vec![survivor.clone()]);
+        assert_eq!(app.selected_host, 0);
+        assert_eq!(app.hosts[0].hostname, survivor.hostname);
+    }
+
+    /// The HOSTS tab is not sorted, so its cursor keeps the configured order.
+    #[test]
+    fn the_hosts_cursor_still_walks_the_configured_order() {
+        let mut app = app_with_hosts();
+        app.hosts[0].diverge_count = Some(0);
+        app.hosts[1].diverge_count = Some(3);
+        app.dashboard_tab = DashboardTab::Hosts;
+
+        app.selected_host = 0;
+        app.next_host();
+        assert_eq!(app.selected_host, 1);
+    }
 
     fn app_with_hosts() -> App {
         let mut app = App::new(4);

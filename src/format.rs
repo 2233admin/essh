@@ -96,6 +96,20 @@ pub fn tag_chips(tags: &[(String, String)], width: usize) -> (Vec<String>, usize
     (shown, hidden)
 }
 
+/// `1 host`, `2 hosts` — the count and its noun, agreeing.
+///
+/// Exists because the fleet view shipped `1 peers never probed`. Every count
+/// in this program is generated from a `usize` that is usually plural and
+/// occasionally not, so the agreement has to be computed rather than typed
+/// into the format string.
+pub fn count(n: usize, singular: &str) -> String {
+    if n == 1 {
+        format!("{} {}", n, singular)
+    } else {
+        format!("{} {}s", n, singular)
+    }
+}
+
 /// Sort tags so the display order is stable across renders.
 pub fn sorted_tags(tags: &std::collections::HashMap<String, String>) -> Vec<(String, String)> {
     let mut v: Vec<(String, String)> = tags.iter().map(|(k, s)| (k.clone(), s.clone())).collect();
@@ -110,6 +124,14 @@ mod tests {
 
     fn at(s: &str) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
+    }
+
+    #[test]
+    fn counts_agree_with_their_noun() {
+        // The v0.3.3 fleet view said "1 peers never probed".
+        assert_eq!(count(1, "peer"), "1 peer");
+        assert_eq!(count(2, "peer"), "2 peers");
+        assert_eq!(count(0, "host"), "0 hosts");
     }
 
     #[test]

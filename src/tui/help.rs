@@ -6,6 +6,68 @@ use ratatui::{
 use crate::design as d;
 use crate::theme::Theme;
 
+/// The one-press bindings, as data.
+///
+/// A list rather than a hand-spaced string because the grid needs the pairs
+/// intact to keep each one on a single row, and the test needs them to check
+/// that it did.
+const FUNCTION_KEYS: [(&str, &str); 10] = [
+    ("F1", "help"),
+    ("F2", "monitor"),
+    ("F3", "files"),
+    ("F4", "forwards"),
+    ("F5", "mini"),
+    ("F6", "detach"),
+    ("F7", "prev session"),
+    ("F8", "next session"),
+    ("F9", "new session"),
+    ("F10", "command menu"),
+];
+
+/// Lay `pairs` out as a grid of whole `key label` cells.
+///
+/// v0.3.3 built the function-key row as one long line and let `Wrap` break it
+/// wherever it landed, which produced "F4 /" at the end of one row and
+/// "forwards" at the start of the next — a binding that does not exist,
+/// printed by the screen whose job is to teach the bindings. A cell is
+/// indivisible: the row takes as many as fit and starts a new row for the
+/// rest, so the break can only ever fall between bindings.
+fn key_grid(
+    pairs: &[(&str, &str)],
+    width: u16,
+    key_style: Style,
+    desc_style: Style,
+) -> Vec<Line<'static>> {
+    const GUTTER: usize = 3;
+    const INDENT: usize = 4;
+
+    let cell = pairs
+        .iter()
+        .map(|(k, d)| k.chars().count() + 1 + d.chars().count())
+        .max()
+        .unwrap_or(0);
+    let usable = (width as usize).saturating_sub(INDENT);
+    // At least one cell per row even when the terminal is too narrow for the
+    // widest one: a cramped row beats an empty screen.
+    let cols = ((usable + GUTTER) / (cell + GUTTER)).max(1);
+
+    pairs
+        .chunks(cols)
+        .map(|chunk| {
+            let mut spans = vec![Span::raw(" ".repeat(INDENT))];
+            for (i, (k, d)) in chunk.iter().enumerate() {
+                spans.push(Span::styled((*k).to_string(), key_style));
+                spans.push(Span::styled(format!(" {}", d), desc_style));
+                if i + 1 < chunk.len() {
+                    let used = k.chars().count() + 1 + d.chars().count();
+                    spans.push(Span::raw(" ".repeat(cell - used + GUTTER)));
+                }
+            }
+            Line::from(spans)
+        })
+        .collect()
+}
+
 pub fn render(f: &mut Frame, theme: &Theme, prefix: &str, scroll: u16) {
     let area = f.area();
 
@@ -30,34 +92,19 @@ pub fn render(f: &mut Frame, theme: &Theme, prefix: &str, scroll: u16) {
     let close_hint = p("w");
     let theme_hint = p("t");
 
-    let lines = vec![
+    // The popup width has to be known before the content is built: the
+    // function-key grid sizes its columns to fit, which is the whole reason a
+    // binding can no longer be broken in half.
+    let popup_width = 68u16.min(area.width.saturating_sub(4));
+    let inner_width = popup_width.saturating_sub(2);
+
+    let mut lines: Vec<Line> = vec![
         Line::raw(""),
-        Line::from(vec![
-            Span::styled("  One press, no prefix:  ", desc_style),
-            Span::styled("F1", key_style),
-            Span::styled(" help   ", desc_style),
-            Span::styled("F2", key_style),
-            Span::styled(" monitor   ", desc_style),
-            Span::styled("F3", key_style),
-            Span::styled(" files   ", desc_style),
-            Span::styled("F4", key_style),
-            Span::styled(" forwards   ", desc_style),
-            Span::styled("F5", key_style),
-            Span::styled(" mini   ", desc_style),
-            Span::styled("F6", key_style),
-            Span::styled(" detach", desc_style),
-        ]),
-        Line::from(vec![
-            Span::styled("                         ", desc_style),
-            Span::styled("F7", key_style),
-            Span::styled("/", desc_style),
-            Span::styled("F8", key_style),
-            Span::styled(" previous / next session   ", desc_style),
-            Span::styled("F9", key_style),
-            Span::styled(" new session   ", desc_style),
-            Span::styled("F10", key_style),
-            Span::styled(" command menu", desc_style),
-        ]),
+        Line::styled("  One press, no prefix", heading_style),
+    ];
+    lines.extend(key_grid(&FUNCTION_KEYS, inner_width, key_style, desc_style));
+
+    lines.extend(vec![
         // Stock macOS maps that row to brightness and volume — F1 dims the
         // screen, F10 mutes. Advertising the keys without saying so sends a
         // Mac user to change their volume and wonder why nothing happened.
@@ -157,8 +204,12 @@ pub fn render(f: &mut Frame, theme: &Theme, prefix: &str, scroll: u16) {
             Span::styled("Add host (user@host[:port])", desc_style),
         ]),
         Line::from(vec![
-            Span::styled("    r           ", key_style),
-            Span::styled("Refresh hosts", desc_style),
+            Span::styled("    p / P       ", key_style),
+            Span::styled("Probe selected host / whole fleet", desc_style),
+        ]),
+        Line::from(vec![
+            Span::styled("    R           ", key_style),
+            Span::styled("Reload config (keeps probe results)", desc_style),
         ]),
         Line::from(vec![
             Span::styled("    /           ", key_style),
@@ -201,7 +252,10 @@ pub fn render(f: &mut Frame, theme: &Theme, prefix: &str, scroll: u16) {
             Span::styled("Run selected action", desc_style),
         ]),
         Line::from(vec![
-            Span::styled("    Esc / Ctrl+p", key_style),
+            // `Esc / Ctrl+p` fills the 12-column key field exactly, so it ran
+            // straight into its description: "Esc / Ctrl+pClose palette".
+            // `^P` is what the footers call it anyway.
+            Span::styled("    Esc / ^P    ", key_style),
             Span::styled("Close palette", desc_style),
         ]),
         Line::raw(""),
@@ -272,12 +326,11 @@ pub fn render(f: &mut Frame, theme: &Theme, prefix: &str, scroll: u16) {
         ]),
         Line::raw(""),
         Line::styled("                    Press ? or Esc to close", dim),
-    ];
+    ]);
 
     // Size to the content, then to the screen. A fixed cap smaller than the
     // reference clips it even on a tall terminal, which is how the last
     // section became unreachable on a 60-row display.
-    let popup_width = 68u16.min(area.width.saturating_sub(4));
     // Height from the *wrapped* content, so "tall enough" is measured in rows
     // that will actually be drawn rather than in source lines.
     let wanted = wrapped_height(&lines, popup_width.saturating_sub(2)) + 2;
@@ -343,6 +396,85 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// `cargo test --bins help::tests::visual_dump -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn visual_dump() {
+        println!("\n{}", screen(150, 40, 0));
+    }
+
+    /// No key column may touch its description.
+    ///
+    /// The keymap pads keys into a fixed field by hand, so a label that fills
+    /// the field exactly collides with the text after it — which is how
+    /// "Esc / Ctrl+pClose palette" reached the screen. One row's worth of
+    /// padding is not a thing to check by eye on every edit.
+    #[test]
+    fn every_binding_is_separated_from_its_description() {
+        for width in [70, 90, 120, 150] {
+            let s = screen(width, 200, 0);
+            for line in s.lines() {
+                let line = line.trim_end();
+                // A lowercase letter or digit immediately followed by an
+                // uppercase word is the collision's signature.
+                let chars: Vec<char> = line.chars().collect();
+                for w in chars.windows(2) {
+                    let collision = (w[0].is_ascii_lowercase() || w[0].is_ascii_digit())
+                        && w[1].is_ascii_uppercase();
+                    if collision {
+                        // Allow real words that contain a capital mid-token.
+                        let ok = ["Ctrl", "Esc", "Enter", "Tab", "Del", "Backspace", "Shift"]
+                            .iter()
+                            .any(|t| {
+                                line.contains(&format!("+{t}")) || line.contains(&format!("/{t}"))
+                            });
+                        assert!(
+                            ok,
+                            "at {width} cols a key runs into its description:\n{line}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The defect this screen shipped with: the function-key row was one long
+    /// line handed to `Wrap`, so at 150 columns it broke as "F4 /" then
+    /// "forwards", and "F9 new /" then "session". The help screen taught two
+    /// bindings that do not exist.
+    #[test]
+    fn no_binding_is_split_across_rows() {
+        for width in [60, 72, 90, 120, 150] {
+            let s = screen(width, 60, 0);
+            for (key, label) in FUNCTION_KEYS {
+                let want = format!("{} {}", key, label);
+                assert!(
+                    s.contains(&want),
+                    "at {width} cols `{want}` is not on one row:\n{s}"
+                );
+            }
+            // The specific broken renderings, named so a regression is obvious.
+            for split in ["F4 /", "F9 new /", "/ forwards", "/ session"] {
+                assert!(
+                    !s.contains(split),
+                    "at {width} cols a binding broke as `{split}`:\n{s}"
+                );
+            }
+        }
+    }
+
+    /// The grid must survive a terminal narrower than one cell.
+    #[test]
+    fn the_key_grid_degrades_to_one_column_rather_than_dividing_by_zero() {
+        let rows = key_grid(
+            &[("F10", "command menu")],
+            4,
+            Style::default(),
+            Style::default(),
+        );
+        assert_eq!(rows.len(), 1);
     }
 
     /// On a terminal too short for the whole reference, the tail must still be

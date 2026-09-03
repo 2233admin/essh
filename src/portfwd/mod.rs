@@ -1,4 +1,5 @@
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
@@ -20,6 +21,39 @@ impl fmt::Display for ForwardDirection {
     }
 }
 
+/// What is actually true about a forward right now.
+///
+/// This replaced `active: bool`, which was set to `true` by the constructor
+/// and never set to anything else. The manager listed two forwards as "Active"
+/// while nothing was bound on either port: `start_local_forward` was never
+/// called from anywhere, and its `TcpListener::bind` error path returned out
+/// of a detached task where no one could see it. A forward is now told apart
+/// from a wish for one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ForwardState {
+    /// Requested; the bind has not returned yet.
+    Starting,
+    /// Bound. `connections` counts sockets accepted so far.
+    Active { connections: u64 },
+    /// Not bound, and why. The reason is the whole point: "Inactive" sent
+    /// people to `ss -ltn` to find out what the program already knew.
+    Failed { reason: String },
+}
+
+impl ForwardState {
+    pub fn label(&self) -> &'static str {
+        match self {
+            ForwardState::Starting => "starting",
+            ForwardState::Active { .. } => "active",
+            ForwardState::Failed { .. } => "failed",
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        matches!(self, ForwardState::Active { .. })
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct PortForward {
     pub id: String,
@@ -28,7 +62,7 @@ pub struct PortForward {
     pub bind_port: u16,
     pub target_host: String,
     pub target_port: u16,
-    pub active: bool,
+    pub state: ForwardState,
 }
 
 // ---------------------------------------------------------------------------
@@ -62,30 +96,25 @@ impl PortForwardManager {
             bind_port,
             target_host: target_host.to_string(),
             target_port,
-            active: true,
+            state: ForwardState::Starting,
         };
         self.forwards.push(fwd);
         self.forwards.last().unwrap()
     }
 
-    pub fn add_remote(
-        &mut self,
-        bind_host: &str,
-        bind_port: u16,
-        target_host: &str,
-        target_port: u16,
-    ) -> &PortForward {
-        let fwd = PortForward {
-            id: uuid::Uuid::new_v4().to_string(),
-            direction: ForwardDirection::Remote,
-            bind_host: bind_host.to_string(),
-            bind_port,
-            target_host: target_host.to_string(),
-            target_port,
-            active: true,
-        };
-        self.forwards.push(fwd);
-        self.forwards.last().unwrap()
+    /// Record what the bind actually did. The only way `Active` is ever set.
+    pub fn set_state(&mut self, id: &str, state: ForwardState) -> bool {
+        match self.forwards.iter_mut().find(|f| f.id == id) {
+            Some(f) => {
+                f.state = state;
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn get(&self, id: &str) -> Option<&PortForward> {
+        self.forwards.iter().find(|f| f.id == id)
     }
 
     pub fn remove(&mut self, id: &str) -> bool {
@@ -104,7 +133,7 @@ impl PortForwardManager {
         }
         self.forwards
             .iter()
-            .filter(|f| f.active)
+            .filter(|f| f.state.is_active())
             .map(|f| format!("{}:{}→{}", f.direction, f.bind_port, f.target_port))
             .collect::<Vec<_>>()
             .join(" ")
@@ -162,26 +191,41 @@ pub fn parse_forward_spec(spec: &str) -> Option<(ForwardDirection, u16, String, 
 ///
 /// Returns a `JoinHandle` that can be aborted to cancel the forward.
 #[allow(dead_code)]
-pub fn start_local_forward(
-    ssh_handle: russh::client::Handle<crate::ssh::ClientHandler>,
+/// Bind the local port and start proxying it over the SSH connection.
+///
+/// The bind is awaited *here*, before the accept loop is spawned, and its
+/// error is returned to the caller. Previously the whole function body was one
+/// `tokio::spawn`, so a failed bind hit `Err(_) => return` inside a detached
+/// task: the port was not listening, nothing reported it, and the UI — which
+/// had already written `active: true` — said "Active". A caller that cannot
+/// see the bind fail cannot tell the truth about it afterwards.
+///
+/// `connections` counts accepted sockets, so the view can say "1 open
+/// connection" from evidence rather than from optimism.
+pub async fn bind_forward(
+    bind_host: &str,
+    bind_port: u16,
+) -> std::io::Result<tokio::net::TcpListener> {
+    tokio::net::TcpListener::bind(format!("{}:{}", bind_host, bind_port)).await
+}
+
+pub async fn start_local_forward(
+    ssh_handle: Arc<russh::client::Handle<crate::ssh::ClientHandler>>,
     forward: &PortForward,
-) -> tokio::task::JoinHandle<()> {
-    let bind_addr = format!("{}:{}", forward.bind_host, forward.bind_port);
+    connections: Arc<AtomicU64>,
+) -> std::io::Result<tokio::task::JoinHandle<()>> {
     let target_host = forward.target_host.clone();
     let target_port = forward.target_port as u32;
-    let ssh_handle = Arc::new(ssh_handle);
 
-    tokio::spawn(async move {
-        let listener = match tokio::net::TcpListener::bind(&bind_addr).await {
-            Ok(l) => l,
-            Err(_) => return,
-        };
+    let listener = bind_forward(&forward.bind_host, forward.bind_port).await?;
 
+    Ok(tokio::spawn(async move {
         loop {
             let (stream, _) = match listener.accept().await {
                 Ok(s) => s,
                 Err(_) => break,
             };
+            connections.fetch_add(1, Ordering::Relaxed);
 
             let handle = Arc::clone(&ssh_handle);
             let host = target_host.clone();
@@ -227,7 +271,7 @@ pub fn start_local_forward(
                 }
             });
         }
-    })
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -247,33 +291,74 @@ mod tests {
     }
 
     #[test]
-    fn test_add_local_forward() {
+    fn a_new_forward_is_not_active_until_something_binds() {
+        // The defect, in one assertion. `add_local` used to set
+        // `active: true`, so the manager reported a forward as working before
+        // anything had touched a socket.
         let mut mgr = PortForwardManager::new();
         let fwd = mgr.add_local("127.0.0.1", 8080, "localhost", 80);
         assert_eq!(fwd.direction, ForwardDirection::Local);
         assert_eq!(fwd.bind_port, 8080);
         assert_eq!(fwd.target_port, 80);
-        assert!(fwd.active);
+        assert_eq!(fwd.state, ForwardState::Starting);
+        assert!(!fwd.state.is_active());
         assert!(!mgr.is_empty());
         assert_eq!(mgr.forwards.len(), 1);
     }
 
+    #[tokio::test]
+    async fn a_bind_that_fails_says_why() {
+        // Hold a port, then ask for it. The error has to reach the caller —
+        // it used to `return` out of a detached task where nobody saw it.
+        let held = bind_forward("127.0.0.1", 0)
+            .await
+            .expect("bind an ephemeral port");
+        let port = held.local_addr().unwrap().port();
+
+        let err = bind_forward("127.0.0.1", port)
+            .await
+            .expect_err("the port is already held");
+        assert_eq!(err.kind(), std::io::ErrorKind::AddrInUse);
+    }
+
+    #[tokio::test]
+    async fn a_bind_that_succeeds_is_listening() {
+        let listener = bind_forward("127.0.0.1", 0).await.expect("bind");
+        let addr = listener.local_addr().unwrap();
+        // A real connection completes, which is the evidence "active" claims.
+        let connected = tokio::net::TcpStream::connect(addr).await;
+        assert!(connected.is_ok(), "nothing accepted on a bound port");
+    }
+
     #[test]
-    fn test_add_remote_forward() {
+    fn the_summary_counts_only_forwards_that_bound() {
         let mut mgr = PortForwardManager::new();
-        let fwd = mgr.add_remote("0.0.0.0", 3306, "localhost", 3306);
-        assert_eq!(fwd.direction, ForwardDirection::Remote);
-        assert_eq!(fwd.bind_port, 3306);
-        assert_eq!(fwd.target_port, 3306);
-        assert!(fwd.active);
+        let id = mgr.add_local("127.0.0.1", 8080, "localhost", 80).id.clone();
+        assert_eq!(mgr.summary(), "", "a starting forward is not a working one");
+
+        mgr.set_state(&id, ForwardState::Active { connections: 0 });
+        assert_eq!(mgr.summary(), "L:8080→80");
+
+        mgr.set_state(
+            &id,
+            ForwardState::Failed {
+                reason: "port 8080 already in use".into(),
+            },
+        );
+        assert_eq!(mgr.summary(), "", "a failed forward is not summarised");
     }
 
     #[test]
     fn test_summary_formatting() {
         let mut mgr = PortForwardManager::new();
-        mgr.add_local("127.0.0.1", 8080, "localhost", 80);
-        mgr.add_remote("0.0.0.0", 3306, "localhost", 3306);
-        assert_eq!(mgr.summary(), "L:8080→80 R:3306→3306");
+        let a = mgr.add_local("127.0.0.1", 8080, "localhost", 80).id.clone();
+        let b = mgr
+            .add_local("127.0.0.1", 3306, "localhost", 3306)
+            .id
+            .clone();
+        mgr.set_state(&a, ForwardState::Active { connections: 0 });
+        mgr.set_state(&b, ForwardState::Active { connections: 0 });
+        assert_eq!(mgr.summary(), "L:8080→80 L:3306→3306");
     }
 
     #[test]
@@ -301,11 +386,11 @@ mod tests {
     fn test_remove_preserves_other_forwards() {
         let mut mgr = PortForwardManager::new();
         mgr.add_local("127.0.0.1", 8080, "localhost", 80);
-        mgr.add_remote("0.0.0.0", 3306, "localhost", 3306);
+        mgr.add_local("127.0.0.1", 3306, "localhost", 3306);
         let id = mgr.forwards[0].id.clone();
         mgr.remove(&id);
         assert_eq!(mgr.forwards.len(), 1);
-        assert_eq!(mgr.forwards[0].direction, ForwardDirection::Remote);
+        assert_eq!(mgr.forwards[0].bind_port, 3306);
     }
 
     #[test]
@@ -345,7 +430,7 @@ mod tests {
     fn test_select_navigation() {
         let mut mgr = PortForwardManager::new();
         mgr.add_local("127.0.0.1", 8080, "localhost", 80);
-        mgr.add_remote("0.0.0.0", 3306, "localhost", 3306);
+        mgr.add_local("127.0.0.1", 3306, "localhost", 3306);
         assert_eq!(mgr.selected, 0);
         mgr.select_next();
         assert_eq!(mgr.selected, 1);

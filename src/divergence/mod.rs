@@ -192,6 +192,11 @@ pub struct FacetComparison {
     pub is_outlier: bool,
     /// For numeric facets: the peer median and this host's percentile.
     pub distribution: Option<Distribution>,
+    /// No value held a strict plurality. There is a disagreement here, but no
+    /// consensus, so no host on this facet is the one that is wrong.
+    pub tied: bool,
+    /// Distinct values the peers reported for this facet.
+    pub distinct: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -217,6 +222,12 @@ impl FacetComparison {
                 self.mine.as_display(),
                 d.median,
                 d.percentile
+            ),
+            _ if self.tied => format!(
+                "{} · no majority — {} across {}",
+                self.mine.as_display(),
+                crate::format::count(self.distinct, "distinct value"),
+                crate::format::count(self.known, "host"),
             ),
             (None, Some(c)) if c != &self.mine => format!(
                 "{} · {} of {} peers have {}",
@@ -244,6 +255,12 @@ pub struct HostDivergence {
 
 impl HostDivergence {
     /// The facets on which this host differs, worst first.
+    /// Facets where the peer set holds no majority. Not divergence: there is
+    /// no consensus for anyone to have broken.
+    pub fn tied(&self) -> Vec<&FacetComparison> {
+        self.comparisons.iter().filter(|c| c.tied).collect()
+    }
+
     pub fn diverging(&self) -> Vec<&FacetComparison> {
         let mut v: Vec<&FacetComparison> =
             self.comparisons.iter().filter(|c| c.diverges()).collect();
@@ -334,6 +351,8 @@ pub fn compare(host: &str, peer_set: &PeerSet, all: &HashMap<String, HostFacts>)
             severity: scored.severity,
             is_outlier: scored.is_outlier,
             distribution: scored.distribution,
+            tied: scored.tied,
+            distinct: scored.distinct,
         });
     }
 
@@ -352,6 +371,11 @@ struct Scored {
     severity: f64,
     is_outlier: bool,
     distribution: Option<Distribution>,
+    /// No value held a strict plurality, so there is no consensus to deviate
+    /// from. Distinct from "everyone agrees" and from "this host is wrong".
+    tied: bool,
+    /// How many distinct values the peers reported.
+    distinct: usize,
 }
 
 /// Categorical severity: `1.0 - (hosts sharing my value / hosts with a value)`.
@@ -369,12 +393,29 @@ fn score_categorical(mine: &FacetValue, readings: &[(&String, &FacetValue)]) -> 
         }
     }
 
-    // Modal value. Ties break on the value itself so the answer is stable
-    // across runs rather than depending on hash order.
-    let consensus = counts
-        .iter()
-        .max_by(|a, b| a.1 .0.cmp(&b.1 .0).then_with(|| b.0.cmp(a.0)))
-        .map(|(_, (_, v))| v.clone());
+    // Modal value — but only when it actually leads. Ties break on the value
+    // itself so the answer is stable across runs rather than depending on hash
+    // order; that stability is why the tie had to be caught here rather than
+    // being papered over downstream. Two hosts holding two values used to make
+    // whichever string sorted higher "the consensus" and the other host the
+    // outlier, which is a coin toss reported as a finding.
+    let mut ranked: Vec<(&String, usize)> = counts.iter().map(|(k, (n, _))| (k, *n)).collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    let tied = match ranked.as_slice() {
+        [] => false,
+        [_] => false,
+        [first, second, ..] => first.1 == second.1,
+    };
+    let distinct = ranked.len();
+
+    let consensus = if tied {
+        None
+    } else {
+        ranked
+            .first()
+            .and_then(|(k, _)| counts.get(*k))
+            .map(|(_, v)| v.clone())
+    };
 
     let total = readings.len();
     let mine_count = mine
@@ -407,6 +448,8 @@ fn score_categorical(mine: &FacetValue, readings: &[(&String, &FacetValue)]) -> 
         severity,
         is_outlier,
         distribution: None,
+        tied,
+        distinct,
     }
 }
 
@@ -421,6 +464,15 @@ fn score_categorical(mine: &FacetValue, readings: &[(&String, &FacetValue)]) -> 
 /// whose disks run evenly from 40% to 79% reports all forty hosts as
 /// diverging, which is both true and useless. The fence is the conventional
 /// robust definition, so there is no tuned constant to defend.
+/// Distinct readings in an already-sorted numeric series.
+fn distinct_count(sorted: &[f64]) -> usize {
+    sorted
+        .windows(2)
+        .filter(|w| (w[1] - w[0]).abs() > f64::EPSILON)
+        .count()
+        + usize::from(!sorted.is_empty())
+}
+
 fn score_numeric(mine: &FacetValue, readings: &[(&String, &FacetValue)]) -> Scored {
     let mut values: Vec<f64> = readings.iter().filter_map(|(_, v)| v.as_number()).collect();
     if values.is_empty() {
@@ -430,6 +482,8 @@ fn score_numeric(mine: &FacetValue, readings: &[(&String, &FacetValue)]) -> Scor
             severity: 0.0,
             is_outlier: false,
             distribution: None,
+            tied: false,
+            distinct: 0,
         };
     }
     values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -447,6 +501,8 @@ fn score_numeric(mine: &FacetValue, readings: &[(&String, &FacetValue)]) -> Scor
                 severity: 0.0,
                 is_outlier: false,
                 distribution: None,
+                tied: false,
+                distinct: distinct_count(&values),
             }
         }
     };
@@ -493,6 +549,8 @@ fn score_numeric(mine: &FacetValue, readings: &[(&String, &FacetValue)]) -> Scor
             min,
             max,
         }),
+        tied: false,
+        distinct: distinct_count(&values),
     }
 }
 
@@ -625,6 +683,13 @@ pub struct GroupSummary {
     pub unprobed: usize,
     /// Hosts that break consensus, and the facets they break it on.
     pub breakers: Vec<(String, Vec<String>)>,
+    /// How many distinct values the group's most-contested facet holds.
+    ///
+    /// Carried so the panel can say *why* a group has no majority instead of
+    /// printing a ratio that implies one side won.
+    pub distinct_values: usize,
+    /// Facets on which no value holds a strict plurality.
+    pub tied_facets: usize,
 }
 
 impl GroupSummary {
@@ -633,14 +698,30 @@ impl GroupSummary {
     pub fn note(&self) -> String {
         if self.host_count == self.unprobed {
             return format!(
-                "{} hosts, none probed — nothing to compare",
-                self.host_count
+                "{}, none probed — nothing to compare",
+                crate::format::count(self.host_count, "host")
+            );
+        }
+        if self.probed() < 2 {
+            return format!(
+                "{} probed — nothing to compare it against",
+                crate::format::count(self.probed(), "host")
+            );
+        }
+        if !self.has_majority() {
+            return format!(
+                "no majority — {} hold {}",
+                crate::format::count(self.probed(), "host"),
+                crate::format::count(self.distinct_values, "distinct value")
             );
         }
         if self.breakers.is_empty() {
-            let mut s = format!("{} / {} full consensus", self.at_consensus, self.probed());
+            // The AT CONSENSUS column already prints `2 / 2`. Printing it
+            // again here is what produced `2 / 2  2 / 2 full consensus`: the
+            // note's job is to say what the ratio cannot.
+            let mut s = "full consensus".to_string();
             if self.unprobed > 0 {
-                s.push_str(&format!(" · {} never probed", self.unprobed));
+                s.push_str(&format!(" · {} unprobed, excluded", self.unprobed));
             }
             return s;
         }
@@ -658,7 +739,10 @@ impl GroupSummary {
         }
 
         let extra = if self.breakers.len() > 1 {
-            format!(", and {} other hosts", self.breakers.len() - 1)
+            format!(
+                ", and {}",
+                crate::format::count(self.breakers.len() - 1, "other host")
+            )
         } else {
             String::new()
         };
@@ -667,6 +751,20 @@ impl GroupSummary {
 
     pub fn probed(&self) -> usize {
         self.host_count - self.unprobed
+    }
+
+    /// Whether this group can hold a consensus at all.
+    ///
+    /// Two hosts with two different answers are a disagreement, not a majority
+    /// and a deviant. v0.3.3 rendered that as `1 / 2` and picked the winner by
+    /// string order, so `role=db` reported db-02 as the outlier because "b"
+    /// sorts after "a". A group needs a strict plurality on every facet before
+    /// any host in it can be called wrong.
+    pub fn has_majority(&self) -> bool {
+        // Two, not one. A lone probed host agrees with itself on every facet,
+        // which `1 / 1 full consensus` reports as a finding about the group.
+        // It is a finding about arithmetic.
+        self.probed() >= 2 && self.tied_facets == 0
     }
 }
 
@@ -677,6 +775,8 @@ pub fn summarise_groups(sets: &[PeerSet], all: &HashMap<String, HostFacts>) -> V
             let mut breakers = Vec::new();
             let mut at_consensus = 0;
             let mut unprobed = 0;
+            let mut tied_facets = 0;
+            let mut distinct_values = 0;
 
             for host in &set.hosts {
                 if !all.contains_key(host) {
@@ -684,6 +784,16 @@ pub fn summarise_groups(sets: &[PeerSet], all: &HashMap<String, HostFacts>) -> V
                     continue;
                 }
                 let d = compare(host, set, all);
+
+                // Ties are a property of the peer set, not of the host being
+                // compared, so one host's view of them is the group's view.
+                let tied = d.tied();
+                if !tied.is_empty() {
+                    tied_facets = tied_facets.max(tied.len());
+                    distinct_values =
+                        distinct_values.max(tied.iter().map(|c| c.distinct).max().unwrap_or(0));
+                }
+
                 let diverging = d.diverging();
                 if diverging.is_empty() {
                     at_consensus += 1;
@@ -702,6 +812,8 @@ pub fn summarise_groups(sets: &[PeerSet], all: &HashMap<String, HostFacts>) -> V
                 at_consensus,
                 unprobed,
                 breakers,
+                distinct_values,
+                tied_facets,
             }
         })
         .collect()
@@ -1154,6 +1266,8 @@ mod tests {
                     "/etc/ssh/sshd_config".into(),
                 ],
             )],
+            distinct_values: 2,
+            tied_facets: 0,
         };
         let note = g.note();
         assert!(note.contains("+3 more"), "{}", note);
@@ -1196,10 +1310,14 @@ mod tests {
     }
 
     #[test]
-    fn a_two_host_split_names_exactly_one_side() {
-        // With 2 hosts disagreeing 1-1 each sits at severity 0.5, but only one
-        // can hold the consensus. Which one is decided deterministically, so
-        // the report does not flicker between runs.
+    fn a_two_host_split_blames_neither_side() {
+        // Superseded `a_two_host_split_names_exactly_one_side`, which asserted
+        // that one of the two is the outlier. It was deterministic — ties broke
+        // on the value string — but determinism is not correctness: "6.2" was
+        // named the consensus over "6.1" because "2" sorts after "1", and the
+        // host holding "6.1" was reported as diverging from a fleet of one.
+        // A 1-1 split has no majority. Both hosts still carry severity 0.5, so
+        // the group still ranks above a group that agrees; neither is blamed.
         let mut all = HashMap::new();
         all.insert(
             "a".into(),
@@ -1228,8 +1346,119 @@ mod tests {
 
         assert_eq!(
             da.score() + db.score(),
-            1,
-            "exactly one side of a 1-1 split is the outlier"
+            0,
+            "a 1-1 split has no majority, so neither side is the outlier"
         );
+        for d in [&da, &db] {
+            assert_eq!(d.tied().len(), 1, "the kernel facet is tied");
+            let k = &d.tied()[0];
+            assert!(k.consensus.is_none(), "a tie names no consensus value");
+            assert_eq!(k.distinct, 2);
+            assert!(
+                k.summary().contains("no majority"),
+                "the summary says so in words: {}",
+                k.summary()
+            );
+        }
+
+        // Determinism, which the superseded test was really protecting: the
+        // same input gives the same answer, run after run.
+        for _ in 0..8 {
+            assert_eq!(compare("a", &set, &all).score(), 0);
+        }
+    }
+
+    #[test]
+    fn a_three_host_split_still_names_the_outlier() {
+        // The tie guard must not disarm the engine. 2-1 is a majority.
+        let mut all = HashMap::new();
+        for (h, v) in [("a", "6.1"), ("b", "6.1"), ("c", "6.2")] {
+            all.insert(
+                h.to_string(),
+                HostFacts::new(h).with(FacetKey::Kernel, text(v)),
+            );
+        }
+        let set = PeerSet {
+            selector: ("role".into(), "web".into()),
+            hosts: vec!["a".into(), "b".into(), "c".into()],
+        };
+
+        assert_eq!(compare("a", &set, &all).score(), 0);
+        assert_eq!(compare("b", &set, &all).score(), 0);
+        assert_eq!(compare("c", &set, &all).score(), 1, "c is alone on 6.2");
+    }
+
+    /// Found by the demo verification run: the note said "and 1 other hosts".
+    #[test]
+    fn the_note_agrees_with_its_own_count_of_other_hosts() {
+        let one = GroupSummary {
+            label: "env=prod".into(),
+            host_count: 4,
+            at_consensus: 1,
+            unprobed: 0,
+            breakers: vec![
+                ("edge-01".into(), vec!["timezone".into()]),
+                ("web-02".into(), vec!["listening ports".into()]),
+            ],
+            distinct_values: 2,
+            tied_facets: 0,
+        };
+        let note = one.note();
+        assert!(note.contains("and 1 other host"), "{}", note);
+        assert!(!note.contains("1 other hosts"), "{}", note);
+
+        let mut many = one.clone();
+        many.breakers
+            .push(("db-02".into(), vec!["nsswitch".into()]));
+        assert!(many.note().contains("and 2 other hosts"), "{}", many.note());
+    }
+
+    #[test]
+    fn a_group_of_one_probed_host_compares_it_against_nothing() {
+        let mut all = HashMap::new();
+        all.insert(
+            "build-01".to_string(),
+            HostFacts::new("build-01").with(FacetKey::Kernel, text("6.1")),
+        );
+        let set = PeerSet {
+            selector: ("env".into(), "staging".into()),
+            hosts: vec!["build-01".into(), "staging-web-01".into()],
+        };
+        let g = &summarise_groups(&[set], &all)[0];
+
+        assert_eq!(g.probed(), 1);
+        assert!(!g.has_majority(), "one host is not a consensus");
+        let note = g.note();
+        assert!(note.contains("nothing to compare"), "{}", note);
+        assert!(!note.contains("full consensus"), "{}", note);
+    }
+
+    #[test]
+    fn a_group_with_no_majority_says_so_instead_of_printing_a_ratio() {
+        // The `role=db` row from the v0.3.3 dashboard: two hosts, two values,
+        // rendered as `1 / 2` — which implies one of them is right.
+        let mut all = HashMap::new();
+        for (h, v) in [("db-01", "glibc"), ("db-02", "glibc+comment")] {
+            all.insert(
+                h.to_string(),
+                HostFacts::new(h).with(FacetKey::Kernel, text(v)),
+            );
+        }
+        let set = PeerSet {
+            selector: ("role".into(), "db".into()),
+            hosts: vec!["db-01".into(), "db-02".into()],
+        };
+        let g = &summarise_groups(&[set], &all)[0];
+
+        assert!(!g.has_majority());
+        assert_eq!(
+            g.breakers.len(),
+            0,
+            "nobody breaks a consensus that is absent"
+        );
+        let note = g.note();
+        assert!(note.contains("no majority"), "{}", note);
+        assert!(note.contains("2 hosts"), "{}", note);
+        assert!(!note.contains('/'), "no ratio implying a winner: {}", note);
     }
 }

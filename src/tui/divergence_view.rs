@@ -228,8 +228,8 @@ fn body<'a>(
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             format!(
-                "{} peers never probed — excluded from every count above: {}",
-                d.unprobed_peers.len(),
+                "{} never probed — excluded from every count above: {}",
+                crate::format::count(d.unprobed_peers.len(), "peer"),
                 d.unprobed_peers.join(", ")
             ),
             Style::default()
