@@ -134,7 +134,7 @@ impl CommandPalette {
             icon: "◇",
             label: "Dashboard: Fleet".to_string(),
             detail: "Fleet health overview".to_string(),
-            action: PaletteAction::SetDashboardTab(DashboardTab::Fleet),
+            action: PaletteAction::SetDashboardTab(DashboardTab::Health),
             score: 0,
         });
         entries.push(PaletteEntry {

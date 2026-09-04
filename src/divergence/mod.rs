@@ -24,7 +24,7 @@ pub mod verdict;
 
 use std::collections::HashMap;
 
-pub use verdict::{verdict_for, Verdict};
+pub use verdict::verdict_for;
 
 /// Which fact about a host is being compared.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

@@ -27,18 +27,29 @@ const ROWS: u16 = 34;
 /// drift apart silently.
 const DOWNS_TO_EDGE: usize = 3;
 
-const FLEET: [(&str, &str); 10] = [
-    ("web-01", "127.0.0.11"),
-    ("web-02", "127.0.0.12"),
-    ("web-03", "127.0.0.13"),
-    ("db-01", "127.0.0.14"),
-    ("db-02", "127.0.0.15"),
-    ("cache-01", "127.0.0.16"),
-    ("edge-01", "127.0.0.17"),
-    ("build-01", "127.0.0.18"),
-    ("monitor-01", "127.0.0.19"),
-    ("staging-web-01", "127.0.0.20"),
+/// SPEC §2.1. Eleven hosts, and `staging-web-01` is not one of the ten that
+/// answer: it is a container that is stopped.
+///
+/// The offline state has to be real. `scripts/fleet.sh` stops that container
+/// on purpose, so the row essh draws for it is drawn from a probe that
+/// actually failed. A fixture where every host answers cannot verify a screen
+/// whose first panel is about hosts that do not.
+const FLEET: [(&str, &str, &str, &str, &str); 11] = [
+    ("web-01", "127.0.0.11", "prod", "us-east", "web"),
+    ("web-02", "127.0.0.12", "prod", "us-east", "web"),
+    ("web-03", "127.0.0.13", "prod", "us-east", "web"),
+    ("db-01", "127.0.0.14", "prod", "us-east", "db"),
+    ("db-02", "127.0.0.15", "prod", "us-east", "db"),
+    ("cache-01", "127.0.0.16", "prod", "us-west", "cache"),
+    ("edge-01", "127.0.0.17", "prod", "us-east", "edge"),
+    ("build-01", "127.0.0.18", "ci", "us-west", "build"),
+    ("monitor-01", "127.0.0.19", "prod", "us-west", "monitor"),
+    ("staging-web-01", "127.0.0.20", "staging", "us-east", "web"),
+    ("jump-01", "127.0.0.21", "prod", "us-east", "jump"),
 ];
+
+/// The one host the fixture keeps down.
+const OFFLINE_HOST: &str = "staging-web-01";
 
 fn bin() -> PathBuf {
     let mut p = std::env::current_exe().expect("test binary path");
@@ -55,10 +66,13 @@ fn bin() -> PathBuf {
 
 fn fleet_available() -> bool {
     use std::net::{SocketAddr, TcpStream};
-    FLEET.iter().all(|(_, ip)| {
-        let addr: SocketAddr = format!("{ip}:2222").parse().expect("addr");
-        TcpStream::connect_timeout(&addr, Duration::from_millis(600)).is_ok()
-    })
+    FLEET
+        .iter()
+        .filter(|(name, ..)| *name != OFFLINE_HOST)
+        .all(|(_, ip, ..)| {
+            let addr: SocketAddr = format!("{ip}:2222").parse().expect("addr");
+            TcpStream::connect_timeout(&addr, Duration::from_millis(600)).is_ok()
+        })
 }
 
 /// A HOME carrying the fixture fleet, tagged exactly as SPEC.md §2 specifies.
@@ -83,20 +97,7 @@ fn demo_home() -> PathBuf {
         key.display()
     );
 
-    // env / region / role per the fixture table.
-    let tags: [(&str, &str, &str); 10] = [
-        ("prod", "us-east", "web"),
-        ("prod", "us-east", "web"),
-        ("prod", "us-east", "web"),
-        ("prod", "us-east", "db"),
-        ("prod", "us-east", "db"),
-        ("prod", "us-west", "cache"),
-        ("prod", "us-east", "edge"),
-        ("staging", "us-west", "build"),
-        ("prod", "us-west", "monitor"),
-        ("staging", "us-east", "web"),
-    ];
-    for ((name, ip), (env, region, role)) in FLEET.iter().zip(tags.iter()) {
+    for (name, ip, env, region, role) in FLEET.iter() {
         cfg.push_str(&format!(
             "\n[[hosts]]\nname = \"{name}\"\nhostname = \"{ip}\"\nport = 2222\nuser = \"matt\"\n\
              tags = {{ env = \"{env}\", region = \"{region}\", role = \"{role}\" }}\n"
@@ -259,7 +260,7 @@ fn universal_rules(screen: &str, beat: &str) {
 #[test]
 fn the_demo_beats_match_the_spec() {
     if !fleet_available() {
-        eprintln!("SKIP: fixture fleet not on 127.0.0.11-20:2222");
+        eprintln!("SKIP: fixture fleet not up; run ./scripts/fleet.sh up");
         return;
     }
 
@@ -329,11 +330,13 @@ fn the_demo_beats_match_the_spec() {
     );
 
     // SPEC §6.1 — and never a zero for a reading we do not have. A row is
-    // either measured or it says `—`.
+    // measured, or it says `—`, or it replaces its measurement columns with
+    // an explanation carrying the recovery key. Never a blank, and never a
+    // confident zero.
     for line in hosts.lines().filter(|l| l.contains("127.0.0.")) {
         assert!(
-            line.contains('%') || line.contains('—'),
-            "a host row shows neither a reading nor a dash:\n{line}"
+            line.contains('%') || line.contains('—') || line.contains(" r "),
+            "a host row shows neither a reading, a dash, nor a reason:\n{line}"
         );
     }
 
@@ -346,6 +349,72 @@ fn the_demo_beats_match_the_spec() {
         !hosts.contains("r probe") && !hosts.contains("r reload"),
         "`r` is advertised as probe or reload again:\n{hosts}"
     );
+
+    // SPEC §1 — the fixture keeps one container down, so this row is drawn
+    // from a probe that actually failed. It must name the state, offer the
+    // recovery key, and show no figures at all: a host that has never
+    // answered has no last reading to be stale about.
+    let offline_row = hosts
+        .lines()
+        .find(|l| l.contains(OFFLINE_HOST))
+        .unwrap_or_else(|| panic!("{OFFLINE_HOST} is missing from the hosts table:\n{hosts}"));
+    assert!(
+        offline_row.contains("offline"),
+        "the stopped container is not shown as offline:\n{offline_row}"
+    );
+    assert!(
+        offline_row.contains("r retry"),
+        "an unreachable row must state its recovery key:\n{offline_row}"
+    );
+    assert!(
+        !offline_row.contains('%'),
+        "a host that never answered is showing a measurement:\n{offline_row}"
+    );
+
+    // ── beat 5 · health ──────────────────────────────────────────────────
+    tui.type_text("3");
+    tui.settle(2500);
+    let health = tui.frame("5 · health");
+    universal_rules(&health, "health");
+
+    // The attention list is the header's partition read a second way, so the
+    // two cannot disagree. The offline host is in it because SPEC §1 says
+    // unreachable needs attention, which is the entry the v2 handoff drops.
+    assert!(
+        health.contains("needs attention"),
+        "the health screen has no attention panel:\n{health}"
+    );
+    let attention_line = health
+        .lines()
+        .find(|l| l.contains(OFFLINE_HOST) && l.contains("offline"))
+        .unwrap_or_else(|| panic!("the offline host is not in the attention list:\n{health}"));
+    assert!(
+        attention_line.contains("no session was open")
+            || attention_line.contains("waiting to reconnect"),
+        "an attention row must say what the state costs:\n{attention_line}"
+    );
+
+    // SPEC §2.4 — busiest across the fleet, siblings collapsed. The fixture
+    // runs three identical loops on build-01; three rows for one fact is
+    // defect 7 of the v0.3.3 list.
+    assert!(
+        health.contains("busiest right now"),
+        "the health screen has no busiest panel:\n{health}"
+    );
+    let repeated = health
+        .lines()
+        .filter(|l| l.contains("build-01") && l.contains("essh-fixture-load"))
+        .count();
+    assert!(
+        repeated <= 1,
+        "identical sibling processes are listed {repeated} times instead of \
+         collapsing with ×N:\n{health}"
+    );
+
+    tui.type_text("2");
+    tui.settle(1500);
+    let back = tui.frame("5b · back on hosts");
+    universal_rules(&back, "hosts again");
 
     // ── beat 6 · walk the hosts list to the outlier ──────────────────────
     // The cursor moves visibly, one row at a time, until it is on the host
@@ -402,51 +471,36 @@ fn the_demo_beats_match_the_spec() {
         "the reload moved the cursor to a different host"
     );
 
-    // ── beat 8 · the fleet keeps the selection, and shows it ─────────────
+    // ── beat 8 · health keeps the selection ──────────────────────────────
     tui.type_text("3");
     tui.settle(3000);
-    let fleet = tui.frame("8 · fleet");
-    universal_rules(&fleet, "fleet");
+    let health2 = tui.frame("8 · health, selection intact");
+    universal_rules(&health2, "health again");
 
-    // The outliers panel draws a cursor (the defect: it drew none).
-    assert!(
-        fleet.contains('▌'),
-        "the fleet table draws no selection marker:\n{fleet}"
-    );
+    // v1's screen 3 listed only outliers, so arriving with a host at
+    // consensus selected snapped the cursor onto a different machine. v2
+    // lists every host in the hosts screen's order, so the selection means
+    // the same thing on both and switching tabs must not move it.
+    tui.type_text("2");
+    tui.settle(1200);
     assert_eq!(
-        marked_row(&fleet),
+        marked_row(&tui.text()),
         "edge-01",
-        "the selection did not survive the tab switch:\n{fleet}"
+        "switching to health and back moved the cursor"
     );
-
-    // SPEC §1 — unprobed hosts are excluded in words, never counted.
-    assert!(
-        fleet.contains("never probed"),
-        "the fleet panel must state the exclusion:\n{fleet}"
-    );
-    // SPEC §2.4 — the verdict counts hosts that were compared, not all of them.
-    assert!(
-        !fleet.contains("of 10 hosts hold every outlier"),
-        "the verdict counts unprobed hosts as though they were fine:\n{fleet}"
-    );
-    if fleet.contains("hold every outlier") {
-        assert!(
-            fleet.contains("comparable hosts hold every outlier"),
-            "the verdict must say what it compared against:\n{fleet}"
-        );
-        assert!(
-            fleet.contains("unprobed, excluded"),
-            "the exclusion must be stated in words:\n{fleet}"
-        );
-    }
+    tui.type_text("3");
+    tui.settle(1200);
 
     // ── beat 9 · the cursor moves the row the screen shows ───────────────
+    tui.type_text("2");
+    tui.settle(1000);
+    let before = marked_row(&tui.text());
     tui.send(b"\x1b[B");
     tui.settle(700);
-    let fleet2 = tui.frame("9 · cursor moved one row");
+    let moved = tui.frame("9 · cursor moved one row");
     assert_ne!(
-        marked_row(&fleet),
-        marked_row(&fleet2),
+        before,
+        marked_row(&moved),
         "the marker did not move with the cursor"
     );
     // Back to the outlier for the card.

@@ -110,6 +110,27 @@ pub enum Commands {
         timeout: u64,
     },
 
+    /// Compare configuration across a tag's hosts
+    ///
+    /// The screen the v2 redesign removed from the dashboard, as a command
+    /// you run when you want it. It connects to every host carrying the tag,
+    /// collects the facets, and prints which of them the group disagrees on.
+    ///
+    ///   essh diff role=web
+    ///   essh diff env=prod --facet timezone
+    Diff {
+        /// Tag as `key=value`, or a bare value matched against every key
+        tag: String,
+
+        /// Only compare this facet
+        #[arg(short, long)]
+        facet: Option<String>,
+
+        /// Seconds to wait per host
+        #[arg(short, long, default_value_t = 12)]
+        timeout: u64,
+    },
+
     /// Execute a command across a host group
     Run {
         /// Group name

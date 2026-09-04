@@ -351,6 +351,20 @@ pub fn sparkline(values: &[u64], width: usize, ceiling: u64) -> String {
 ///
 /// Derived from the measured peak rather than fixed, so a quiet series still
 /// uses the full four levels instead of flatlining along the bottom.
+/// A ceiling for an RTT graph, never below `RTT_FLOOR_MS`.
+///
+/// `axis_ceiling` scales to the series' own peak, which is right for a graph
+/// whose magnitude is the point and wrong for latency. A fleet on loopback
+/// answers in 3ms every time, and a self-scaled graph draws that as a solid
+/// wall of full-height cells: the healthiest possible reading rendered as the
+/// worst possible picture. An absolute floor keeps a healthy host flat and
+/// low, and the ceiling still rises when something is genuinely slow.
+pub const RTT_FLOOR_MS: u64 = 20;
+
+pub fn rtt_ceiling(values: &[u64]) -> u64 {
+    axis_ceiling(values).max(RTT_FLOOR_MS)
+}
+
 pub fn axis_ceiling(values: &[u64]) -> u64 {
     let peak = values.iter().copied().max().unwrap_or(1).max(1);
     let mut rung = 1u64;
@@ -376,18 +390,6 @@ pub fn header_cell(label: &str, emphasised: bool, t: &crate::theme::Theme) -> Sp
     Span::styled(
         label.to_uppercase(),
         Style::default().fg(if emphasised { t.brand } else { t.border }),
-    )
-}
-
-/// A tag chip. `warn` marks the tag implicated in a divergence.
-pub fn chip(text: &str, warn: bool, t: &crate::theme::Theme) -> Span<'static> {
-    Span::styled(
-        format!(" {} ", text),
-        Style::default().fg(if warn {
-            t.status_warn
-        } else {
-            t.text_secondary
-        }),
     )
 }
 

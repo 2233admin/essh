@@ -46,7 +46,7 @@ pub fn active_tab(view: AppView, tab: DashboardTab) -> DashboardTab {
 pub const TABS: [(&str, &str, DashboardTab); 4] = [
     ("1", "sessions", DashboardTab::Sessions),
     ("2", "hosts", DashboardTab::Hosts),
-    ("3", "fleet", DashboardTab::Fleet),
+    ("3", "health", DashboardTab::Health),
     ("4", "config", DashboardTab::Config),
 ];
 
@@ -302,8 +302,8 @@ mod tests {
             );
         }
         assert_eq!(
-            active_tab(AppView::Dashboard, DashboardTab::Fleet),
-            DashboardTab::Fleet
+            active_tab(AppView::Dashboard, DashboardTab::Health),
+            DashboardTab::Health
         );
     }
 

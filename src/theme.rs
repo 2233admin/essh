@@ -135,18 +135,6 @@ impl Theme {
         }
     }
 
-    /// Severity by count of diverged items.
-    ///
-    /// Zero is `border`, not the ramp's cold end: agreement should be quiet
-    /// rather than celebrated, and the ramp's floor still reads as a value.
-    pub fn divergence_count(&self, n: usize) -> Color {
-        if n == 0 {
-            self.border
-        } else {
-            self.ramp_divergence((n as f64 / 3.0).min(1.0))
-        }
-    }
-
     fn ramp(&self, stops: &[Color; 5], f: f64, ansi: Color) -> Color {
         if self.defers_to_terminal() {
             // A five-stop RGB gradient has no 16-colour equivalent. Degrade to
@@ -693,21 +681,12 @@ mod tests {
         assert_eq!(t.bounded_bad(93.0), crate::design::RED);
     }
 
-    #[test]
-    fn a_diverge_count_of_zero_is_faint_not_green() {
-        let t = dark();
-        // Agreement should be quiet, not celebrated.
-        assert_eq!(t.divergence_count(0), crate::design::FAINT);
-        assert_eq!(t.divergence_count(3), crate::design::RED);
-        assert_ne!(t.divergence_count(1), t.divergence_count(2));
-    }
-
     /// The second hole, found the same way as the first — by rendering and
     /// looking rather than by reading.
     ///
     /// Colour can escape the theme two ways: a screen naming a constant, which
     /// `no_screen_paints_from_a_hardcoded_colour` catches, or a design helper
-    /// baking one into a `Span` it hands back. `header_cell`, `chip`,
+    /// baking one into a `Span` it hands back. `header_cell`,
     /// `footer_line`, `headline` and `none_line` all did the second, from
     /// inside the one file the first check exempts — so every table header and
     /// footer in essh stayed *Watch-teal under every theme.

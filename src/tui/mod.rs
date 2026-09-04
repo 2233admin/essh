@@ -130,6 +130,10 @@ pub struct HostVitals {
     /// next frame. `None` means it is not currently over.
     pub cpu_over_since: Option<std::time::Instant>,
     pub sampled_at: Option<std::time::Instant>,
+    /// Top processes by CPU. The health screen's busiest-across-the-fleet
+    /// list, and what lets an attention row name the cause of the load
+    /// instead of just reporting it.
+    pub processes: Vec<crate::monitor::ProcessInfo>,
     /// Set when the host answers TCP but the sampler could not read metrics
     /// off it. Reachable with no numbers is a fourth thing the table has to
     /// say, and it is not the same as offline.
@@ -329,7 +333,10 @@ impl HostState {
 pub enum DashboardTab {
     Sessions,
     Hosts,
-    Fleet,
+    /// v1's `Fleet`, which was fleet configuration consensus. v2 replaces it
+    /// with host health: what needs attention, why, and which process is
+    /// responsible. SPEC §8 says where the consensus screen went.
+    Health,
     Config,
 }
 
@@ -446,27 +453,6 @@ pub struct App {
     pub peer_sets: Vec<crate::divergence::PeerSet>,
 }
 
-/// Host indices in the order the FLEET table draws them.
-///
-/// One definition, used by the renderer and by the cursor, because the defect
-/// was that they disagreed.
-pub fn fleet_order_of(hosts: &[HostDisplay]) -> Vec<usize> {
-    let mut order: Vec<usize> = (0..hosts.len())
-        .filter(|&i| hosts[i].diverge_count != Some(0))
-        .collect();
-    order.sort_by(|&a, &b| {
-        let (x, y) = (&hosts[a], &hosts[b]);
-        match (x.diverge_count, y.diverge_count) {
-            (Some(p), Some(q)) => q.cmp(&p),
-            // Unprobed hosts sink to the bottom: they are not "in agreement".
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => x.name.cmp(&y.name),
-        }
-    });
-    order
-}
-
 impl App {
     pub fn new(max_sessions: usize) -> Self {
         Self {
@@ -579,55 +565,6 @@ impl App {
             .map(|h| h.name.clone())
     }
 
-    /// Group summaries for the GROUPS panel.
-    pub fn group_summaries(&self) -> Vec<crate::divergence::GroupSummary> {
-        crate::divergence::summarise_groups(&self.peer_sets, &self.host_facts)
-    }
-
-    /// Per-facet agreement across the primary peer set, worst first.
-    ///
-    /// This is what the CONSENSUS box's right column shows: not how ragged
-    /// the fleet is, but *where*.
-    pub fn facet_agreement(&self) -> Vec<(String, f64)> {
-        let Some(set) = self.peer_sets.first() else {
-            return Vec::new();
-        };
-        let mut totals: std::collections::HashMap<String, (usize, usize)> =
-            std::collections::HashMap::new();
-
-        for host in &set.hosts {
-            if !self.host_facts.contains_key(host) {
-                continue;
-            }
-            let d = crate::divergence::compare(host, set, &self.host_facts);
-            for key in &d.identical {
-                let e = totals.entry(key.label()).or_insert((0, 0));
-                e.0 += 1;
-                e.1 += 1;
-            }
-            for c in &d.comparisons {
-                let e = totals.entry(c.key.label()).or_insert((0, 0));
-                e.1 += 1;
-                if !c.diverges() {
-                    e.0 += 1;
-                }
-            }
-        }
-
-        let mut out: Vec<(String, f64)> = totals
-            .into_iter()
-            .filter(|(_, (_, total))| *total > 0)
-            .map(|(k, (ok, total))| (k, ok as f64 / total as f64))
-            .collect();
-        // Worst first — the ragged facets are the point.
-        out.sort_by(|a, b| {
-            a.1.partial_cmp(&b.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.0.cmp(&b.0))
-        });
-        out
-    }
-
     /// A one-line reason for the HUD, when this host differs from its peers.
     ///
     /// Returns `None` when the host is at consensus — silence is the correct
@@ -713,42 +650,6 @@ impl App {
         (coverage, platform.label().to_string())
     }
 
-    /// Fleet-wide consensus across the primary peer set, if there is one.
-    pub fn fleet_consensus(&self) -> Option<(String, crate::divergence::Consensus)> {
-        let set = self.peer_sets.first()?;
-        Some((
-            set.label(),
-            crate::divergence::consensus(set, &self.host_facts),
-        ))
-    }
-
-    /// A verdict per diverging host, for the Fleet screen.
-    ///
-    /// The handoff's Fleet mockup leads with a VERDICT block — *"the verdict
-    /// does the reasoning: which host, which facet, and whether it's one
-    /// cause or two"*. Counting how many hosts disagree is not that; it says
-    /// there is a problem without saying what it is.
-    ///
-    /// Only hosts that actually diverge produce a verdict, and only when a
-    /// template matches — an unpatterned difference gets no sentence rather
-    /// than an invented one.
-    pub fn fleet_verdicts(&self) -> Vec<(String, crate::divergence::Verdict)> {
-        let Some(set) = self.peer_sets.first() else {
-            return Vec::new();
-        };
-        let mut out = Vec::new();
-        for host in &set.hosts {
-            if !self.host_facts.contains_key(host) {
-                continue; // never probed: absence of facts, not agreement
-            }
-            let d = crate::divergence::compare(host, set, &self.host_facts);
-            if let Some(v) = crate::divergence::verdict_for(&d) {
-                out.push((host.clone(), v));
-            }
-        }
-        out
-    }
-
     pub fn set_hosts(&mut self, hosts: Vec<HostDisplay>) {
         // Follow the host, not the index.
         //
@@ -808,41 +709,16 @@ impl App {
         self.hosts.get(self.selected_host)
     }
 
-    /// Host indices in the order the FLEET table draws them.
+    /// The rows the cursor can land on.
     ///
-    /// Sorted by divergence, hosts at consensus left out — the panel is a list
-    /// of outliers. Shared with the renderer so the cursor walks the rows the
-    /// screen shows. It used to walk the configured order against a table
-    /// sorted by divergence, so `Down` moved the (invisible) selection
-    /// somewhere unrelated to the row under it, and `D` opened the divergence
-    /// view for a host the user had not pointed at. The Sessions tab had the
-    /// same defect and it was fixed the same way.
-    pub fn fleet_order(&self) -> Vec<usize> {
-        fleet_order_of(&self.hosts)
-    }
-
-    /// Put the cursor on a row the FLEET panel actually draws.
-    ///
-    /// The panel lists outliers, so a host at consensus has no row. Arriving
-    /// on the tab with one selected left the marker nowhere and the first
-    /// arrow key jumping somewhere unrelated. Landing on the worst offender
-    /// is also where the eye goes first.
-    pub fn select_into_fleet_order(&mut self) {
-        let order = self.fleet_order();
-        if !order.contains(&self.selected_host) {
-            if let Some(&first) = order.first() {
-                self.selected_host = first;
-                self.table_state.select(Some(first));
-            }
-        }
-    }
-
-    /// The rows the cursor can land on, for whichever tab is on screen.
+    /// One order for every tab that shows hosts. v1 had two: the fleet
+    /// screen listed outliers worst-first while the cursor walked the
+    /// configured order, so `Down` moved an invisible selection somewhere
+    /// unrelated to the row under it. v2's health screen lists the same
+    /// hosts in the same order as the hosts screen, which removes the
+    /// question rather than answering it twice.
     fn navigable_hosts(&self) -> Vec<usize> {
-        match self.dashboard_tab {
-            DashboardTab::Fleet => self.fleet_order(),
-            _ => self.filtered_host_indices(),
-        }
+        self.filtered_host_indices()
     }
 
     pub fn next_host(&mut self) {
@@ -969,10 +845,6 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         }
         AppView::Dashboard => {
             let filtered_indices = app.filtered_host_indices();
-            let groups = app.group_summaries();
-            let fleet_consensus = app.fleet_consensus();
-            let facet_agreement = app.facet_agreement();
-            let verdicts = app.fleet_verdicts();
             dashboard::render(
                 frame,
                 frame.area(),
@@ -986,10 +858,6 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 app.status_message.as_deref(),
                 app.search_active,
                 &app.search_query,
-                &groups,
-                fleet_consensus,
-                &facet_agreement,
-                &verdicts,
                 &app.theme,
             );
         }
@@ -1784,55 +1652,48 @@ mod render_smoke {
 mod search_selection_tests {
     use super::*;
 
-    /// The defect the demo tape had to work around with "three presses, not
-    /// one": the FLEET table sorts by divergence, the cursor walked the
-    /// configured order, and the table drew no selection at all, so `D` opened
-    /// the divergence view for a host nobody had pointed at.
+    /// v1's screen 3 listed only the outliers, worst first, while the cursor
+    /// walked the configured order. `Down` therefore moved an invisible
+    /// selection to a row nobody had pointed at, and the demo tape worked
+    /// around it with "three presses, not one".
+    ///
+    /// v2 removes the second order rather than reconciling the two: the
+    /// health screen lists every host, in the same order as the hosts screen,
+    /// so the selection means one thing on both.
     #[test]
-    fn the_fleet_cursor_walks_the_rows_the_fleet_table_draws() {
+    fn the_cursor_walks_the_same_rows_on_hosts_and_health() {
         let mut app = app_with_hosts();
-        // Configured order and divergence order deliberately disagree.
         let mut extra = app.hosts[0].clone();
         extra.name = "edge-01".into();
         extra.hostname = "10.0.0.3".into();
-        app.hosts.push(extra.clone());
-        extra.name = "staging-web-01".into();
-        extra.hostname = "10.0.0.4".into();
         app.hosts.push(extra);
 
+        // Divergence used to decide the health screen's order and to hide
+        // hosts at consensus from it. Neither is true any more, so setting it
+        // must change nothing.
         app.hosts[0].diverge_count = Some(0);
-        app.hosts[1].diverge_count = Some(1);
-        app.hosts[2].diverge_count = Some(3);
-        app.hosts[3].diverge_count = None;
-        app.dashboard_tab = DashboardTab::Fleet;
+        app.hosts[1].diverge_count = Some(3);
 
-        let order = app.fleet_order();
-        let names: Vec<&str> = order.iter().map(|&i| app.hosts[i].name.as_str()).collect();
+        let walk = |app: &mut App| -> Vec<String> {
+            app.selected_host = 0;
+            let mut seen = vec![app.hosts[0].name.clone()];
+            for _ in 1..app.hosts.len() {
+                app.next_host();
+                seen.push(app.hosts[app.selected_host].name.clone());
+            }
+            seen
+        };
+
+        app.dashboard_tab = DashboardTab::Hosts;
+        let on_hosts = walk(&mut app);
+        app.dashboard_tab = DashboardTab::Health;
+        let on_health = walk(&mut app);
+
+        assert_eq!(on_hosts, on_health, "the two tabs walk different rows");
         assert_eq!(
-            names,
-            vec![
-                app.hosts[2].name.as_str(),
-                app.hosts[1].name.as_str(),
-                app.hosts[3].name.as_str()
-            ],
-            "worst first, unprobed last, at-consensus not listed"
-        );
-
-        // The cursor visits those rows, in that order, and nothing else.
-        app.selected_host = order[0];
-        let mut visited = vec![app.selected_host];
-        for _ in 0..order.len() - 1 {
-            app.next_host();
-            visited.push(app.selected_host);
-        }
-        assert_eq!(visited, order, "the cursor left the drawn rows");
-
-        // And it never lands on a host the panel does not draw.
-        app.next_host();
-        assert_eq!(app.selected_host, order[0], "wrapped past the last row");
-        assert_ne!(
-            app.selected_host, 0,
-            "landed on the at-consensus host, which has no row"
+            on_hosts.len(),
+            app.hosts.len(),
+            "a host at consensus was skipped"
         );
     }
 

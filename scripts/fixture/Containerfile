@@ -1,0 +1,25 @@
+# The fixture host from SPEC §2. One image, eleven containers.
+#
+# Everything the sampler and the divergence collector read has to be here:
+# procps for `ps`/`free`/`uptime`, iproute2 for `ss`, coreutils for
+# `sha256sum` and `df`. nginx and redis are installed on every host and
+# started only on the ones whose role wants them, so a role's listening ports
+# differ without the package list differing — which is the shape of a real
+# fleet's disagreement, and a harder case for the collector than a missing
+# package would be.
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      openssh-server procps iproute2 coreutils nginx redis-server tzdata less \
+ && rm -rf /var/lib/apt/lists/* \
+ && mkdir -p /run/sshd \
+ && useradd -m -s /bin/bash matt
+
+COPY authorized_keys /home/matt/.ssh/authorized_keys
+RUN chown -R matt:matt /home/matt/.ssh \
+ && chmod 700 /home/matt/.ssh \
+ && chmod 600 /home/matt/.ssh/authorized_keys
+
+EXPOSE 22
+CMD ["/usr/sbin/sshd", "-D", "-e"]

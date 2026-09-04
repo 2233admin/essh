@@ -36,14 +36,31 @@ Sixteen findings, each with the correction this document adopts. Numbers 1, 3,
 | 15 | Session HOST `13ch`, attention host `12ch`, busiest RSS `6ch` | 15 / 15 / 7 | `staging-web-01` is 14 characters and `16.8 MB` is 7 |
 | 16 | Add-forward row offers `R HOST:PORT → 127.0.0.1:PORT` | `L` form only | Remote forwards are not implemented and phase 0 refuses `R` with a reason. Advertising them is defect 2 of the original seven, rebuilt |
 
-Two more that are not defects in the design but change what the work is:
+Five more found while building it, in §0.1.
+
+Two that are not defects in the design but change what the work is:
 
 - **The hosts screen needs metrics the app cannot collect.** §6.1. This is the
   largest single item in v2 and the handoff does not mention it.
 - **Six near-black background tokens do not survive the trip to a terminal.**
   §5.2.
 
-## 1. Four host states, and they partition
+## 0.1 Found while building
+
+The review above was done against the design. These came out of implementing
+it, which is a different reading and finds different things.
+
+| # | What | Resolution |
+| --- | --- | --- |
+| 17 | Four states are five. Every host is `unprobed` on the first frame after start, and calling that `offline` is a lie the size of the fleet | `HostState::Unprobed`, a transient of at most one probe cycle. The header prints only its non-zero counts, so at steady state it shows the handoff's four or fewer |
+| 18 | The hosts screen's `sort load ↓` would reorder rows every five seconds, under the cursor | Configured order. A live sort moving rows under a cursor is the defect PLAN §0 records twice, and `sort load` belongs on a key, not on the clock |
+| 19 | v1's screen 3 listed only outliers, so arriving there snapped the cursor onto a host you had not selected, and `Down` walked rows the hosts screen did not draw | One order for both tabs. v2's health screen lists every host, so the second order is removed rather than reconciled |
+| 20 | A single health card stretched across 146 cells puts its label at one edge and its value at the other | Cards keep a fixed 38-cell width whether there is one or four |
+| 21 | A collapsed `×N` row truncates its own count off the end of a long command, turning a summed 296% back into what reads as one process | The `×N` is reserved before the name is cut |
+
+And one revision to §8 below, made deliberately rather than found: `D` stays.
+
+## 1. Five host states, and they partition
 
 The handoff uses "offline" for a host whose connection reset and for a host
 that has never answered. They arrive from different mechanisms, need different
@@ -56,6 +73,12 @@ findings 1, 2 and 4.
 | busy | `●` | `status_warn` | Answers, at least one threshold crossed | none |
 | dropped | `●` | `status_error` | Answered, then the connection reset. Scrollback and session survive | `r` reconnect |
 | offline | `◌` | `absent` | Has not answered since we started asking | `r` retry |
+| unprobed | `◌` | `absent` | Not asked yet | none |
+
+`unprobed` is the fifth, and it is not in the handoff. It lasts at most one
+probe cycle, but every host is in it on the first frame after start, and
+calling that `offline` would be a lie the size of the fleet. The header prints
+only its non-zero counts, so at steady state it shows four or fewer.
 
 The rules that assign them:
 
@@ -108,7 +131,8 @@ Clock for every screen: `12:25:34`. All hosts have 8 cores.
 | jump-01 | 127.0.0.21 | prod jump | up | 0 | 3% | 19% | 11% | 1.2 | 0.24 |
 
 Header: `● 7 up  ● 2 busy  ● 1 dropped  ◌ 1 offline  │  6 sessions  12:25:34`.
-7 + 2 + 1 + 1 = 11.
+7 + 2 + 1 + 1 = 11. Zero counts are dropped: a header that says `0 dropped`
+invites the reader to go looking for what dropped.
 
 `load` is `cpu% × cores`, and the demo asserts the relation rather than the
 literal, because the demo fleet's real load is whatever the containers are
@@ -306,6 +330,13 @@ Eight cells is the btop idiom and the smallest width where the gradient reads.
 
 TAGS at 36 is generous for `prod web`. It absorbs the widening and stays Fill.
 
+**Order is the configured order.** The handoff's top-right slot reads
+`sort load ↓`, and a load sort on a five-second poll reorders the table while
+you are looking at it: the row under the cursor becomes a different machine
+between one frame and the next, and the next `Enter` connects to it. That is
+the defect PLAN §0 records twice, once for a divergence sort and once for a
+reload. Sorting belongs on a key, not on the clock.
+
 Unreachable rows replace the five measurement columns with one explanation
 spanning CPU through RTT 60s:
 
@@ -331,7 +362,11 @@ and always fits. Assert the floor, not the string:
 Attention: `15 9 Fill`, gaps 2. `146 - 15 - 9 - 4 = 118` for the sentence.
 Host 15, not 12, for `staging-web-01`. Verdict 9 fits `disk 81%`.
 
-Cards: four at `Fill`, gaps 2, so 35 each, inner 31. Longest internals are
+Cards: fixed at 38 cells each, gaps 2, inner 34. Fixed rather than `Fill`,
+because a single card stretched across 146 cells puts its label at one edge of
+the screen and its value at the other, with a hundred cells of nothing between
+them. A stale card keeps the live geometry so its columns do not move when a
+host goes away. Longest internals are
 `● staging-web-01 │ offline` at 26 and `up 12d · deploy.sh running` at 26.
 Below 4 cards' worth of width, drop to 2 columns and then 1, oldest attention
 last.
@@ -684,11 +719,20 @@ behind explicit commands:
 Both require sessions or one-shot connections to the peer set, which is the
 same fan-out §6.1 needs. Build it once.
 
-This costs the drill-down. v1 bound `D` on two screens to a divergence modal.
-v2 has no `D` and no modal, so a user who wants to know why two hosts behave
-differently leaves the TUI. That is the deliberate trade: the handoff says the
-audience found the consensus screens too advanced, and a CLI command they never
-run is better than a dashboard column they misread.
+**`D` stays, and this is a revision to the first draft of this section.**
+
+The draft said v2 has no `D` and no modal, so a user who wants to know why two
+hosts differ leaves the TUI. Implementing it made that look wrong. The
+handoff's argument is about the *default dashboard*: consensus percentages sat
+in a column every user saw and had to interpret. A key you have to know about
+is not on the default dashboard and taxes nobody, and removing it would strand
+a working drill-down behind a CLI command the TUI never mentions.
+
+So: the `DIVERGE` column, the groups panel and the consensus screen are gone,
+`D` on the hosts screen still opens the divergence view for the host under the
+cursor, and `essh diff` exists for the same question outside the TUI. What v2
+drops is divergence as something you are shown; what it keeps is divergence as
+something you can ask for.
 
 Still out of scope, unchanged: the launcher, add-host and edit-host forms, the
 search overlay, and the full-screen monitor for one host.
@@ -724,8 +768,44 @@ their CPU is whatever they are doing:
 - The attention list equals `busy + dropped + offline` from the header.
 - The transfer's ETA equals remaining bytes over the reported rate.
 
-The fixture fleet is eleven Debian containers on `127.0.0.11`-`.21:2222`.
-staging-web-01 is stopped, not staged: the offline state in the demo is a
-container that is actually down. edge-01's session is dropped by stopping its
-container after the session opens, so the scrollback-survives claim is tested
-rather than drawn.
+`scripts/fleet.sh` builds and stages the fixture: eleven Debian containers on
+`127.0.0.11`-`.21:2222`, one hostname each, running a real sshd.
+
+Two things about it are not decoration.
+
+**staging-web-01 is stopped, not staged.** The offline state in the demo is a
+container that is actually down, so the row essh draws for it comes from a
+probe that actually failed. A fixture where every host answers cannot verify a
+screen whose first panel is about hosts that do not.
+
+**build-01 runs real load.** Three nice'd busy loops, named
+`essh-fixture-load` so `ps` reports something a reader can act on. The
+attention row has to name a process the sampler actually found; staging that
+by drawing it would verify nothing, and it is what makes the `×N` collapse
+testable.
+
+Staging is part of the fixture and is scripted like the rest of it, because it
+lives in the containers' running state rather than their filesystem. A restart
+keeps nginx installed and loses nginx listening, so the fleet comes back
+reachable and unstaged, and `demo_verify` then fails on "web-02 is not serving
+:80" and blames the app for a fact about the laptop. `./scripts/fleet.sh check`
+reports that drift without changing anything.
+
+### 9.1 What the container fleet cannot show
+
+Containers share the host kernel and, without lxcfs, the host's `/proc`. All
+eleven therefore report the *laptop's* CPU, memory and disk, identically. The
+plumbing is real and so is every reading, but the numbers do not differ per
+host, so the fixture cannot demonstrate one host busy and another idle on the
+hosts table.
+
+What it does verify: that the sampler reaches hosts with no session, that the
+columns fill from live readings, that unknown is `—` and never `0`, that an
+unreachable host states its recovery key, that the header's counts partition,
+and that the attention list agrees with them. `ps` *is* per-container, so the
+busiest panel, the sibling collapse and the cause attribution are all real.
+
+Making per-host CPU differ needs either lxcfs in the fixture image or a
+sampler that reads cgroup counters when `/proc` is the host's. Neither is
+needed to verify the screens; both are needed before a screenshot of this
+fixture means anything about a real fleet.

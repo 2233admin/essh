@@ -445,6 +445,14 @@ async fn run_command(cmd: Commands, config: AppConfig) -> anyhow::Result<()> {
             run_on_group(&config, &group, &command).await?;
         }
 
+        Commands::Diff {
+            tag,
+            facet,
+            timeout,
+        } => {
+            diff_tag(&config, &tag, facet.as_deref(), timeout).await?;
+        }
+
         Commands::Workspace { action } => {
             let dir = workspace::Workspace::default_dir();
             match action {
@@ -1433,7 +1441,7 @@ async fn tui_main_loop(
                         let Some(host) = app.hosts.iter().find(|h| h.name == sweep.host) else {
                             continue;
                         };
-                        match sampler_connect_config(&config, host) {
+                        match sampler_connect_config(config, host) {
                             Ok(cfg) => jobs.push((sweep.host, cfg, sweep.command)),
                             Err(why) => {
                                 // Recorded as a failure so the host backs off
@@ -2797,10 +2805,13 @@ async fn handle_dashboard_key(
         }
         KeyCode::Char('1') => app.dashboard_tab = DashboardTab::Sessions,
         KeyCode::Char('2') => app.dashboard_tab = DashboardTab::Hosts,
-        KeyCode::Char('3') => {
-            app.dashboard_tab = DashboardTab::Fleet;
-            app.select_into_fleet_order();
-        }
+        // No cursor snap. v1's screen 3 listed only outliers, so arriving
+        // with a host at consensus selected left the marker on no row at all
+        // and the tab moved the cursor to compensate. v2's health screen
+        // lists every host, in the same order as the hosts screen, so the
+        // selection means the same thing on both and moving it would be the
+        // surprise.
+        KeyCode::Char('3') => app.dashboard_tab = DashboardTab::Health,
         KeyCode::Char('4') => app.dashboard_tab = DashboardTab::Config,
         KeyCode::Char('/') => {
             app.search_active = true;
@@ -2834,7 +2845,10 @@ async fn handle_dashboard_key(
         // 'D' opens the divergence overlay for the selected host. Upper-case
         // so it does not collide with 'd' (delete host).
         KeyCode::Char('D')
-            if matches!(app.dashboard_tab, DashboardTab::Hosts | DashboardTab::Fleet) =>
+            if matches!(
+                app.dashboard_tab,
+                DashboardTab::Hosts | DashboardTab::Health
+            ) =>
         {
             app.show_divergence = !app.show_divergence;
         }
@@ -4789,6 +4803,7 @@ fn apply_sample(
             host.vitals.disk_pct = sample.disk_pct;
             host.vitals.load1 = sample.load1;
             host.vitals.cores = sample.cores;
+            host.vitals.processes = sample.processes.clone();
             host.vitals.sampled_at = Some(now);
             host.vitals.unreadable = None;
         }
@@ -4796,11 +4811,13 @@ fn apply_sample(
             host.vitals.unreadable = Some(why.clone());
             host.vitals.cpu_over_since = None;
         }
-        fleet::sampler::Outcome::Unreachable(_) => {
+        fleet::sampler::Outcome::Unreachable(reason) => {
             // Reachability is the prober's to report. A failed exec is
             // evidence about this connection, not about the host, and two
             // sources disagreeing about whether a machine is up is the defect
-            // SPEC §1 exists to prevent.
+            // SPEC §1 exists to prevent. The reason still goes somewhere a
+            // person can find it.
+            tracing::debug!(host = %host.name, %reason, "fleet sweep failed");
         }
     }
 }
@@ -5045,6 +5062,182 @@ async fn health_check(config: &AppConfig, group: Option<&str>) -> anyhow::Result
             Ok(Err(e)) => println!("  ✗ {}:{} — {}", host.hostname, host.port, e),
             Err(_) => println!("  ✗ {}:{} — timeout", host.hostname, host.port),
         }
+    }
+    Ok(())
+}
+
+/// `essh diff <tag>` — SPEC §8.
+///
+/// The v2 redesign takes configuration divergence off the dashboard. The
+/// handoff's reason is that consensus percentages ask the reader to interpret
+/// a ratio, and the intended user should not have to. That is a good argument
+/// about the default screen and not one about the capability, so the engine
+/// stays and gets a command: you run it when you have the question.
+///
+/// It is deliberately not the old screen in a terminal. No agreement
+/// percentage, no per-facet meters. One line per facet the group disagrees
+/// on, and who holds which value.
+async fn diff_tag(
+    config: &AppConfig,
+    tag: &str,
+    only_facet: Option<&str>,
+    timeout_secs: u64,
+) -> anyhow::Result<()> {
+    let (key, value) = match tag.split_once('=') {
+        Some((k, v)) => (Some(k), v),
+        None => (None, tag),
+    };
+
+    let members: Vec<&config::HostEntry> = config
+        .hosts
+        .iter()
+        .filter(|h| {
+            h.tags
+                .iter()
+                .any(|(k, v)| v == value && key.is_none_or(|want| want == k))
+        })
+        .collect();
+
+    if members.len() < 2 {
+        // One host is not a comparison, and saying "full consensus" about it
+        // is the defect the divergence engine already refuses to commit.
+        println!(
+            "{} matched {} — nothing to compare.",
+            tag,
+            crate::format::count(members.len(), "host")
+        );
+        return Ok(());
+    }
+
+    println!(
+        "comparing {} on {}…",
+        crate::format::count(members.len(), "host"),
+        tag
+    );
+
+    let mut facts: std::collections::HashMap<String, divergence::HostFacts> =
+        std::collections::HashMap::new();
+    let mut unreachable: Vec<(String, String)> = Vec::new();
+
+    for entry in &members {
+        let host = HostDisplay {
+            name: entry.name.clone(),
+            hostname: entry.hostname.clone(),
+            port: entry.port,
+            user: entry.user.clone().unwrap_or_default(),
+            status: HostStatus::NeverProbed,
+            last_seen: String::new(),
+            tags: String::new(),
+            tag_pairs: Vec::new(),
+            latency_ms: None,
+            latency_history: Vec::new(),
+            jump_host: None,
+            diverge_count: None,
+            vitals: Default::default(),
+            session_count: 0,
+        };
+        let cfg = match sampler_connect_config(config, &host) {
+            Ok(mut c) => {
+                c.timeout = std::time::Duration::from_secs(timeout_secs);
+                c
+            }
+            Err(why) => {
+                unreachable.push((entry.name.clone(), why));
+                continue;
+            }
+        };
+        let session = match SshClient::connect(&cfg).await {
+            Ok((s, _, _)) => s,
+            Err(e) => {
+                unreachable.push((entry.name.clone(), e.to_string()));
+                continue;
+            }
+        };
+        let raw = divergence::collect::probe_uname(&session.handle)
+            .await
+            .unwrap_or_default();
+        let platform = monitor::Platform::from_uname(&raw);
+        if !platform.is_supported() {
+            unreachable.push((
+                entry.name.clone(),
+                format!("no collectors for {}", platform.label()),
+            ));
+            session.close().await.ok();
+            continue;
+        }
+        let collected = divergence::collect::collect_facts(
+            &session.handle,
+            &entry.name,
+            &platform,
+            &config.divergence.config_paths,
+            &config.divergence.packages,
+        )
+        .await;
+        facts.insert(entry.name.clone(), collected);
+        session.close().await.ok();
+    }
+
+    // A host we could not reach is excluded and said so, never counted as
+    // agreeing. Silence about it would turn "we did not look" into "it
+    // matches", which is SPEC §1 one layer down.
+    for (name, why) in &unreachable {
+        println!("  {name}: not compared — {why}");
+    }
+    if facts.len() < 2 {
+        println!("\nfewer than two hosts answered; nothing to compare.");
+        return Ok(());
+    }
+
+    let set = divergence::PeerSet {
+        selector: (key.unwrap_or("tag").to_string(), value.to_string()),
+        hosts: facts.keys().cloned().collect(),
+    };
+
+    // The group's own summary, which is where the "no majority" and
+    // "N unprobed, excluded" wording lives. On the dashboard a ratio was a
+    // thing the reader had to interpret; here it is the answer to the
+    // question they typed.
+    let summary = divergence::summarise_groups(std::slice::from_ref(&set), &facts);
+    let c = divergence::consensus(&set, &facts);
+    println!();
+    if let Some(g) = summary.first() {
+        println!(
+            "{}  {:.1}% agree · {} of {} checks · {} of {} hosts at consensus · {}",
+            g.label,
+            c.percent(),
+            c.agreeing_checks,
+            c.total_checks,
+            g.at_consensus,
+            g.probed(),
+            g.note()
+        );
+        println!();
+    }
+
+    let mut disagreements = 0usize;
+    for name in set.hosts.iter() {
+        let d = divergence::compare(name, &set, &facts);
+        let diverging: Vec<_> = d
+            .diverging()
+            .into_iter()
+            .filter(|c| only_facet.is_none_or(|want| c.key.label().contains(want)))
+            .collect();
+        if diverging.is_empty() {
+            continue;
+        }
+        disagreements += diverging.len();
+        println!("{name}");
+        for c in diverging {
+            println!("  {:<28} {}", c.key.label(), c.summary());
+        }
+    }
+
+    if disagreements == 0 {
+        println!(
+            "{} agree on every comparable facet · {} not compared",
+            crate::format::count(facts.len(), "host"),
+            unreachable.len()
+        );
     }
     Ok(())
 }
