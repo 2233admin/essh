@@ -10,10 +10,21 @@ use ratatui::{
 };
 
 /// Render the session tab bar at the top
+/// The session chips. SPEC §4's terminal screen.
+///
+/// One chip per session: its number, its host, and a dot carrying the
+/// **host's** state rather than the session's. That is the point of the row —
+/// a machine going into trouble is visible from inside a shell on a different
+/// machine, without leaving the session to find out.
+///
+/// v1 spelled the state out per chip (`● Recon. 2/3`, `● Disconn.`), which is
+/// the same information at four times the width, on the one row the whole
+/// design budgets for chrome.
 pub fn render_tab_bar(
     f: &mut Frame,
     area: Rect,
     sessions: &[Session],
+    chips: &[SessionChip],
     active_index: usize,
     notifications: &[Notification],
     theme: &Theme,
@@ -21,73 +32,75 @@ pub fn render_tab_bar(
     let now = chrono::Local::now().format("%H:%M:%S").to_string();
     let mut spans: Vec<Span> = vec![
         Span::styled(" ESSH ", Style::default().fg(theme.brand).bold()),
-        Span::styled("── ", Style::default().fg(theme.separator)),
+        Span::styled(" ", Style::default().fg(theme.separator)),
     ];
 
     for (i, session) in sessions.iter().enumerate() {
-        let has_notifications = notifications
+        let host_state = chips
+            .get(i)
+            .map(|c| c.host_state)
+            .unwrap_or(crate::tui::HostState::Unprobed);
+        let active = i == active_index;
+        let alerting = notifications
             .iter()
             .any(|n| n.session_label == session.label);
-        if let SessionState::Reconnecting { attempt, max } = &session.state {
-            let label = format!(
-                "[{}] {} ● Recon. {}/{} ",
-                i + 1,
-                session.label,
-                attempt,
-                max
-            );
-            if i == active_index {
-                spans.push(Span::styled(
-                    label,
-                    Style::default().fg(theme.status_error).bold(),
-                ));
+
+        let label = Style::default()
+            .fg(if active {
+                theme.text_emphasis
+            } else if session.is_dropped() {
+                theme.status_error
+            } else if alerting || session.has_new_output {
+                theme.brand
             } else {
-                spans.push(Span::styled(label, Style::default().fg(theme.status_error)));
-            }
-        } else if let SessionState::Disconnected { .. } = &session.state {
-            let label = format!("[{}] {} ● Disconn. ", i + 1, session.label);
-            if i == active_index {
-                spans.push(Span::styled(
-                    label,
-                    Style::default().fg(theme.status_error).bold(),
-                ));
+                theme.text_secondary
+            })
+            .bg(if active { theme.panel_alt } else { theme.bg })
+            .add_modifier(if active {
+                Modifier::BOLD
             } else {
-                spans.push(Span::styled(label, Style::default().fg(theme.status_error)));
-            }
-        } else {
-            let label = format!("[{}] {} ", i + 1, session.label);
-            if i == active_index {
-                spans.push(Span::styled(
-                    label,
-                    Style::default().fg(theme.active_tab).bold(),
-                ));
-            } else if has_notifications {
-                spans.push(Span::styled(
-                    label,
-                    Style::default().fg(theme.brand).underlined(),
-                ));
-                spans.push(Span::styled(
-                    "! ",
-                    Style::default().fg(theme.active_tab).bold(),
-                ));
-            } else if session.has_new_output {
-                spans.push(Span::styled(
-                    label,
-                    Style::default().fg(theme.brand).underlined(),
-                ));
-            } else if matches!(session.state, SessionState::Suspended) {
-                spans.push(Span::styled(label, Style::default().fg(theme.text_muted)));
+                Modifier::empty()
+            });
+
+        spans.push(Span::styled(
+            format!(" {} {} ", i + 1, session.label),
+            label,
+        ));
+        spans.push(Span::styled(
+            "●",
+            Style::default().fg(host_state.color(theme)).bg(if active {
+                theme.panel_alt
             } else {
-                spans.push(Span::styled(label, Style::default().fg(theme.text_primary)));
-            }
-        }
-        spans.push(Span::raw(" "));
+                theme.bg
+            }),
+        ));
+        // The one thing a chip says beyond its host: this session has said
+        // something since you last looked at it.
+        spans.push(Span::styled(
+            if alerting {
+                " ! "
+            } else if session.has_new_output && !active {
+                " • "
+            } else {
+                "  "
+            },
+            Style::default().fg(theme.key_hint),
+        ));
     }
 
+    // Dashed, because it is an affordance rather than a session.
     spans.push(Span::styled(
-        format!("── {}", now),
+        " + new ",
         Style::default().fg(theme.text_muted),
     ));
+
+    let used: usize = spans
+        .iter()
+        .map(|s| crate::design::width_of(&s.content))
+        .sum();
+    let pad = (area.width as usize).saturating_sub(used + now.len() + 1);
+    spans.push(Span::raw(" ".repeat(pad)));
+    spans.push(Span::styled(now, Style::default().fg(theme.text_muted)));
 
     let tab_bar = Paragraph::new(Line::from(spans)).block(
         Block::default()
@@ -95,6 +108,12 @@ pub fn render_tab_bar(
             .border_style(Style::default().fg(theme.border)),
     );
     f.render_widget(tab_bar, area);
+}
+
+/// What a chip needs that a `Session` does not carry: how its host is doing.
+#[derive(Clone, Copy)]
+pub struct SessionChip {
+    pub host_state: crate::tui::HostState,
 }
 
 /// Render the terminal output area for a session using the vt100 virtual terminal
@@ -244,17 +263,22 @@ pub fn render_status_bar(
         )]
     };
 
-    // Append port forward summary if any
-    if let Some(mgr) = pfm {
-        let summary = mgr.summary();
-        if !summary.is_empty() {
-            spans.push(Span::raw("  "));
-            spans.push(Span::styled("Fwd:", Style::default().fg(theme.text_muted)));
-            spans.push(Span::styled(
-                summary,
-                Style::default().fg(theme.status_good),
-            ));
-        }
+    // SPEC §2.5 — count the forwards that bound, not the rules that exist.
+    // `2 forwards` beside a panel showing one of them refusing to bind is the
+    // "Active with nothing listening" defect wearing a different line.
+    if let Some((active, total)) = pfm.and_then(|m| m.active_count()) {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            format!(
+                "{active} of {} active",
+                crate::format::count(total, "forward")
+            ),
+            Style::default().fg(if active == total {
+                theme.status_good
+            } else {
+                theme.status_warn
+            }),
+        ));
     }
 
     let status = Paragraph::new(Line::from(spans)).block(

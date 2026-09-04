@@ -1,6 +1,7 @@
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 // ---------------------------------------------------------------------------
 // Port forwarding types
@@ -63,6 +64,14 @@ pub struct PortForward {
     pub target_host: String,
     pub target_port: u16,
     pub state: ForwardState,
+    /// When the state last changed. SPEC §3.4's LAST CHECK column.
+    ///
+    /// The reference calls it a probe time, which would be true of a design
+    /// that probes. SPEC §6.3 settled on the bind result *being* the state —
+    /// we own the listener, so there is nothing to probe — and this is when
+    /// that result was established. Reporting it as a probe would be a claim
+    /// about a check nobody ran.
+    pub state_since: Instant,
 }
 
 // ---------------------------------------------------------------------------
@@ -97,6 +106,7 @@ impl PortForwardManager {
             target_host: target_host.to_string(),
             target_port,
             state: ForwardState::Starting,
+            state_since: Instant::now(),
         };
         self.forwards.push(fwd);
         self.forwards.last().unwrap()
@@ -106,7 +116,15 @@ impl PortForwardManager {
     pub fn set_state(&mut self, id: &str, state: ForwardState) -> bool {
         match self.forwards.iter_mut().find(|f| f.id == id) {
             Some(f) => {
+                // Only when the state actually changes. A connection count
+                // ticking up is not a rebind, and stamping it as one would
+                // make a forward bound an hour ago claim it was bound a
+                // second ago every time somebody used it.
+                let changed = std::mem::discriminant(&f.state) != std::mem::discriminant(&state);
                 f.state = state;
+                if changed {
+                    f.state_since = Instant::now();
+                }
                 true
             }
             None => false,
@@ -127,16 +145,23 @@ impl PortForwardManager {
         removed
     }
 
-    pub fn summary(&self) -> String {
+    /// How many of the configured forwards actually bound. SPEC §2.5.
+    ///
+    /// The handoff's terminal meta line reads `2 forwards`, which counts
+    /// rules. Its own forwards panel, two screens later, shows one of those
+    /// two failing to bind. Counting rules is the same defect as reporting
+    /// `Active` with nothing listening, moved to a different line.
+    ///
+    /// `None` when there are no forwards at all: a session with none should
+    /// say nothing rather than `0 of 0`.
+    pub fn active_count(&self) -> Option<(usize, usize)> {
         if self.forwards.is_empty() {
-            return String::new();
+            return None;
         }
-        self.forwards
-            .iter()
-            .filter(|f| f.state.is_active())
-            .map(|f| format!("{}:{}→{}", f.direction, f.bind_port, f.target_port))
-            .collect::<Vec<_>>()
-            .join(" ")
+        Some((
+            self.forwards.iter().filter(|f| f.state.is_active()).count(),
+            self.forwards.len(),
+        ))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -287,7 +312,7 @@ mod tests {
         let mgr = PortForwardManager::new();
         assert!(mgr.is_empty());
         assert!(mgr.forwards.is_empty());
-        assert_eq!(mgr.summary(), "");
+        assert_eq!(mgr.active_count(), None);
     }
 
     #[test]
@@ -330,14 +355,24 @@ mod tests {
         assert!(connected.is_ok(), "nothing accepted on a bound port");
     }
 
+    /// SPEC §2.5. The count is of forwards that bound, not rules that exist.
+    ///
+    /// The handoff's terminal meta line says `2 forwards` while its own
+    /// forwards panel, two screens later, shows one of the two refusing to
+    /// bind. Counting rules is the "Active with nothing listening" defect
+    /// moved to a different line.
     #[test]
-    fn the_summary_counts_only_forwards_that_bound() {
+    fn the_count_is_of_forwards_that_bound() {
         let mut mgr = PortForwardManager::new();
         let id = mgr.add_local("127.0.0.1", 8080, "localhost", 80).id.clone();
-        assert_eq!(mgr.summary(), "", "a starting forward is not a working one");
+        assert_eq!(
+            mgr.active_count(),
+            Some((0, 1)),
+            "a starting forward is not a working one"
+        );
 
         mgr.set_state(&id, ForwardState::Active { connections: 0 });
-        assert_eq!(mgr.summary(), "L:8080→80");
+        assert_eq!(mgr.active_count(), Some((1, 1)));
 
         mgr.set_state(
             &id,
@@ -345,26 +380,17 @@ mod tests {
                 reason: "port 8080 already in use".into(),
             },
         );
-        assert_eq!(mgr.summary(), "", "a failed forward is not summarised");
+        assert_eq!(
+            mgr.active_count(),
+            Some((0, 1)),
+            "a failed forward is still a rule, and still not active"
+        );
     }
 
+    /// A session with no forwards says nothing, rather than `0 of 0`.
     #[test]
-    fn test_summary_formatting() {
-        let mut mgr = PortForwardManager::new();
-        let a = mgr.add_local("127.0.0.1", 8080, "localhost", 80).id.clone();
-        let b = mgr
-            .add_local("127.0.0.1", 3306, "localhost", 3306)
-            .id
-            .clone();
-        mgr.set_state(&a, ForwardState::Active { connections: 0 });
-        mgr.set_state(&b, ForwardState::Active { connections: 0 });
-        assert_eq!(mgr.summary(), "L:8080→80 L:3306→3306");
-    }
-
-    #[test]
-    fn test_summary_empty() {
-        let mgr = PortForwardManager::new();
-        assert_eq!(mgr.summary(), "");
+    fn no_forwards_is_not_a_count() {
+        assert_eq!(PortForwardManager::new().active_count(), None);
     }
 
     #[test]

@@ -1535,32 +1535,12 @@ fn render_health_cards(
     }
 }
 
-/// One row of the busiest list: a process, or a run of identical siblings.
-#[derive(Debug, PartialEq)]
+/// One row of the busiest list: a host, and a process or a run of identical
+/// siblings on it.
+#[derive(Debug)]
 pub struct Busiest {
     pub host: String,
-    pub name: String,
-    pub cpu_pct: f64,
-    pub rss_kb: u64,
-    /// How many identical siblings this row stands for.
-    pub siblings: usize,
-}
-
-impl Busiest {
-    /// The process, and how many of it, inside `width` cells.
-    ///
-    /// The `×N` is reserved before the name is cut, not appended after. Doing
-    /// it the other way round truncates the count off the end of a long
-    /// command, which turns a collapsed row back into an ordinary one that
-    /// happens to be reporting 296% CPU.
-    fn label(&self, width: usize) -> String {
-        if self.siblings <= 1 {
-            return d::ellipsise(&self.name, width);
-        }
-        let tail = format!(" ×{}", self.siblings);
-        let room = width.saturating_sub(d::width_of(&tail));
-        format!("{}{tail}", d::ellipsise(&self.name, room))
-    }
+    pub proc: crate::monitor::Grouped,
 }
 
 /// Every reachable host's processes, siblings collapsed, hottest first.
@@ -1573,35 +1553,26 @@ impl Busiest {
 /// Unreachable hosts are excluded. Their last process list is a snapshot of
 /// what *was* running, and "busiest right now" is a claim about now.
 pub fn busiest(hosts: &[super::HostDisplay]) -> Vec<Busiest> {
-    let mut rows: Vec<Busiest> = Vec::new();
-    for h in hosts.iter().filter(|h| h.state().recovery().is_none()) {
-        for p in &h.vitals.processes {
-            match rows
-                .iter_mut()
-                .find(|r| r.host == h.name && r.name == p.name)
-            {
-                Some(r) => {
-                    r.cpu_pct += p.cpu_pct;
-                    r.rss_kb += p.mem_rss_kb;
-                    r.siblings += 1;
-                }
-                None => rows.push(Busiest {
+    let mut rows: Vec<Busiest> = hosts
+        .iter()
+        .filter(|h| h.state().recovery().is_none())
+        .flat_map(|h| {
+            crate::monitor::collapse_siblings(&h.vitals.processes)
+                .into_iter()
+                .map(|proc| Busiest {
                     host: h.name.clone(),
-                    name: p.name.clone(),
-                    cpu_pct: p.cpu_pct,
-                    rss_kb: p.mem_rss_kb,
-                    siblings: 1,
-                }),
-            }
-        }
-    }
+                    proc,
+                })
+        })
+        .collect();
     rows.sort_by(|a, b| {
-        b.cpu_pct
-            .partial_cmp(&a.cpu_pct)
+        b.proc
+            .cpu_pct
+            .partial_cmp(&a.proc.cpu_pct)
             .unwrap_or(std::cmp::Ordering::Equal)
             // Ties by name, so a fleet at rest does not reshuffle every sweep.
             .then_with(|| a.host.cmp(&b.host))
-            .then_with(|| a.name.cmp(&b.name))
+            .then_with(|| a.proc.name.cmp(&b.proc.name))
     });
     rows
 }
@@ -1665,19 +1636,19 @@ fn render_busiest(f: &mut Frame, area: Rect, hosts: &[super::HostDisplay], theme
         let mut row = d::fit_left(&p.host, HOST, Style::default().fg(theme.text_secondary));
         row.push(Span::raw(" ".repeat(GAP)));
         row.extend(d::fit_left(
-            &p.label(proc_w),
+            &p.proc.label(proc_w),
             proc_w,
             Style::default().fg(theme.text_primary),
         ));
         row.push(Span::raw(" ".repeat(GAP)));
         row.extend(d::fit_right(
-            &format!("{:.1}", p.cpu_pct),
+            &format!("{:.1}", p.proc.cpu_pct),
             CPU,
-            Style::default().fg(theme.bounded_bad(p.cpu_pct)),
+            Style::default().fg(theme.bounded_bad(p.proc.cpu_pct)),
         ));
         row.push(Span::raw(" ".repeat(GAP)));
         row.extend(d::fit_right(
-            &widgets::format_bytes(p.rss_kb * 1024),
+            &widgets::format_bytes(p.proc.mem_rss_kb * 1024),
             RSS,
             Style::default().fg(theme.text_muted),
         ));
@@ -2127,12 +2098,13 @@ mod hosts_tests {
 
         let rows = busiest(&[h]);
         assert_eq!(rows.len(), 2, "siblings did not collapse: {rows:?}");
-        let workers = rows
+        let workers = &rows
             .iter()
-            .find(|r| r.name.contains("worker"))
-            .expect("the worker row");
+            .find(|r| r.proc.name.contains("worker"))
+            .expect("the worker row")
+            .proc;
         assert_eq!(workers.siblings, 6);
-        assert_eq!(workers.rss_kb, 18_000, "RSS is not summed");
+        assert_eq!(workers.mem_rss_kb, 18_000, "RSS is not summed");
         assert!((workers.cpu_pct - 3.0).abs() < 0.001, "CPU is not summed");
         assert!(workers.label(40).ends_with("×6"), "{:?}", workers.label(40));
         // The count survives a column too narrow for the name, because it is

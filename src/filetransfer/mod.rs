@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Instant;
 
 /// Represents a remote file entry
 #[derive(Clone, Debug)]
@@ -36,6 +37,13 @@ pub struct TransferProgress {
     pub bytes_transferred: u64,
     pub total_bytes: u64,
     pub complete: bool,
+    /// When the transfer began, for the rate and the ETA.
+    ///
+    /// SPEC §2.6: always show rate and ETA, never a bare bar. A percentage
+    /// tells you how much is left and nothing about whether to wait for it —
+    /// 48% of a file is ten seconds or ten minutes depending on a number the
+    /// bar does not carry.
+    pub started: Option<Instant>,
 }
 
 #[derive(Clone, Debug)]
@@ -51,6 +59,22 @@ impl TransferProgress {
         } else {
             (self.bytes_transferred as f64 / self.total_bytes as f64) * 100.0
         }
+    }
+
+    /// Bytes per second so far, or `None` before there is anything to
+    /// average over. A rate computed from a zero-length interval is a
+    /// division by zero dressed as a measurement.
+    pub fn rate_bps(&self) -> Option<f64> {
+        let elapsed = self.started?.elapsed().as_secs_f64();
+        (elapsed >= 0.25 && self.bytes_transferred > 0)
+            .then(|| self.bytes_transferred as f64 / elapsed)
+    }
+
+    /// Seconds left at the rate so far. `None` until there is a rate.
+    pub fn eta_secs(&self) -> Option<u64> {
+        let rate = self.rate_bps()?;
+        let left = self.total_bytes.saturating_sub(self.bytes_transferred);
+        (rate > 0.0).then(|| (left as f64 / rate).round() as u64)
     }
 }
 
@@ -377,6 +401,7 @@ mod tests {
             bytes_transferred: 75,
             total_bytes: 100,
             complete: false,
+            started: None,
         };
         assert!((progress.percent() - 75.0).abs() < f64::EPSILON);
 
@@ -386,6 +411,7 @@ mod tests {
             bytes_transferred: 0,
             total_bytes: 0,
             complete: false,
+            started: None,
         };
         assert!((zero.percent() - 0.0).abs() < f64::EPSILON);
 
@@ -395,6 +421,7 @@ mod tests {
             bytes_transferred: 500,
             total_bytes: 500,
             complete: true,
+            started: None,
         };
         assert!((done.percent() - 100.0).abs() < f64::EPSILON);
     }

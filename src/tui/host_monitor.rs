@@ -123,6 +123,7 @@ pub fn render(
     net_tx_history: &MetricHistory,
     sort: &ProcessSort,
     process_scroll: usize,
+    group_processes: bool,
     peers: &PeerContext,
     theme: &Theme,
 ) {
@@ -234,7 +235,15 @@ pub fn render(
     render_vs_peers(f, mid[1], metrics, peers, theme);
 
     // ── Processes
-    render_processes(f, rows[2], metrics, sort, process_scroll, theme);
+    render_processes(
+        f,
+        rows[2],
+        metrics,
+        sort,
+        process_scroll,
+        group_processes,
+        theme,
+    );
 }
 
 fn render_disk(f: &mut Frame, area: Rect, metrics: &HostMetrics, theme: &Theme) {
@@ -413,12 +422,14 @@ fn render_vs_peers(
     f.render_widget(Paragraph::new(lines), inner);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_processes(
     f: &mut Frame,
     area: Rect,
     metrics: &HostMetrics,
     sort: &ProcessSort,
     scroll: usize,
+    grouped: bool,
     theme: &Theme,
 ) {
     let procs = match sort {
@@ -429,7 +440,36 @@ fn render_processes(
         ProcessSort::Cpu => "by cpu",
         ProcessSort::Memory => "by mem",
     };
-    let count = format!("{} procs", procs.len());
+    // SPEC §4: identical siblings collapse with `×N` and summed RSS, and `g`
+    // ungroups. A worker pool is one fact about the machine, and printing it
+    // eleven times pushes the ten processes that are not a worker pool off
+    // the panel.
+    let rows_data = if grouped {
+        crate::monitor::collapse_siblings(procs)
+    } else {
+        procs
+            .iter()
+            .map(|p| crate::monitor::Grouped {
+                pid: p.pid,
+                name: p.name.clone(),
+                cpu_pct: p.cpu_pct,
+                mem_pct: p.mem_pct,
+                mem_rss_kb: p.mem_rss_kb,
+                siblings: 1,
+            })
+            .collect()
+    };
+    let procs = &rows_data;
+    let collapsed = rows_data.iter().filter(|g| g.siblings > 1).count();
+    let count = if grouped && collapsed > 0 {
+        format!(
+            "{} rows · {} collapsed",
+            procs.len(),
+            crate::format::count(collapsed, "group")
+        )
+    } else {
+        crate::format::count(procs.len(), "process")
+    };
     // Rows visible after the header line, so the range in the border matches
     // what is actually on screen rather than the window height.
     let visible = area.height.saturating_sub(3) as usize;
@@ -457,6 +497,7 @@ fn render_processes(
                 ("⎋", " terminal"),
                 ("↑↓", " scroll"),
                 ("s", " sort"),
+                ("g", if grouped { " ungroup" } else { " group" }),
                 ("?", " help"),
             ],
             foot_right: page.as_deref(),
@@ -491,8 +532,7 @@ fn render_processes(
             Row::new(vec![
                 Cell::from(Line::from(p.pid.to_string()).right_aligned())
                     .style(Style::default().fg(theme.border)),
-                Cell::from(truncate_left(&p.name, name_width))
-                    .style(Style::default().fg(theme.text_primary)),
+                Cell::from(p.label(name_width)).style(Style::default().fg(theme.text_primary)),
                 Cell::from(Line::from(format!("{:.1}", p.cpu_pct)).right_aligned()).style(
                     Style::default().fg(if p.cpu_pct > 2.0 {
                         theme.status_warn
@@ -874,6 +914,7 @@ mod layout_dump {
                 &h,
                 &ProcessSort::Cpu,
                 0,
+                true,
                 &PeerContext::default(),
                 &t,
             );

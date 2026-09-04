@@ -416,6 +416,9 @@ pub struct App {
     pub status_set_at: Option<std::time::Instant>,
     pub monitor_sort: host_monitor::ProcessSort,
     pub monitor_process_scroll: usize,
+    /// Whether identical sibling processes collapse into one row. SPEC §4,
+    /// and defect 7 of the v0.3.3 list. `g` toggles it.
+    pub group_processes: bool,
     pub show_help: bool,
     /// First visible line of the help overlay.
     ///
@@ -517,6 +520,7 @@ impl App {
             status_set_at: None,
             monitor_sort: host_monitor::ProcessSort::Cpu,
             monitor_process_scroll: 0,
+            group_processes: true,
             show_help: false,
             help_scroll: 0,
             pending_delete: None,
@@ -592,6 +596,22 @@ impl App {
                     idle: crate::format::short_duration(s.idle_secs()),
                     dropped: s.is_dropped(),
                 }
+            })
+            .collect()
+    }
+
+    /// The state of each session's host, in session order.
+    pub fn session_chips(&self) -> Vec<session_view::SessionChip> {
+        self.session_manager
+            .sessions
+            .iter()
+            .map(|s| session_view::SessionChip {
+                host_state: self
+                    .hosts
+                    .iter()
+                    .find(|h| h.hostname == s.hostname && h.port == s.port)
+                    .map(|h| h.state())
+                    .unwrap_or(HostState::Unprobed),
             })
             .collect()
     }
@@ -967,6 +987,9 @@ impl App {
 
 pub fn render(frame: &mut Frame, app: &mut App) {
     app.refresh_derived();
+    // The chips carry the *host's* state, so trouble on a machine you are not
+    // looking at is visible from inside a shell on one you are.
+    let chips = app.session_chips();
     match app.view {
         AppView::Launcher => {
             launcher_view::render(
@@ -1034,6 +1057,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                     frame,
                     rows[0],
                     &app.session_manager.sessions,
+                    &chips,
                     active_idx,
                     &app.notifications,
                     &app.theme,
@@ -1157,6 +1181,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                     frame,
                     chunks[0],
                     &app.session_manager.sessions,
+                    &chips,
                     active_idx,
                     &app.notifications,
                     &app.theme,
@@ -1204,6 +1229,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                     &tx_hist,
                     &app.monitor_sort,
                     app.monitor_process_scroll,
+                    app.group_processes,
                     &app.peer_context(active_idx),
                     &app.theme,
                 );
@@ -1227,6 +1253,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                     frame,
                     chunks[0],
                     &app.session_manager.sessions,
+                    &chips,
                     active_idx,
                     &app.notifications,
                     &app.theme,
@@ -1259,9 +1286,16 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
                 // Port forward overlay
                 if let Some(mgr) = app.port_forward_managers.get(active_idx) {
+                    let host = app
+                        .session_manager
+                        .sessions
+                        .get(active_idx)
+                        .map(|s| s.label.clone())
+                        .unwrap_or_default();
                     portfwd_view::render(
                         frame,
                         mgr,
+                        &host,
                         &app.port_forward_input,
                         app.port_forward_adding,
                         &app.theme,
@@ -1281,6 +1315,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                     frame,
                     chunks[0],
                     &app.session_manager.sessions,
+                    &chips,
                     active_idx,
                     &app.notifications,
                     &app.theme,

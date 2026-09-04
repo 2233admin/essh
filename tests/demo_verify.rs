@@ -598,8 +598,8 @@ fn the_demo_beats_match_the_spec() {
         "a forward that bound is not reported active:\n{bound}"
     );
     assert!(
-        bound.contains("1 of 1 active"),
-        "the panel must count what actually bound:\n{bound}"
+        bound.contains("1 rule") && bound.contains("1 active"),
+        "the panel must name the host and count what actually bound:\n{bound}"
     );
 
     // The same port twice: the bind fails, and the row says why.
@@ -620,7 +620,7 @@ fn the_demo_beats_match_the_spec() {
         "a failure with no reason sends people to `ss -ltn`:\n{failed}"
     );
     assert!(
-        failed.contains("1 of 2 active"),
+        failed.contains("2 rules") && failed.contains("1 active"),
         "the count must not include the forward that failed:\n{failed}"
     );
     tui.send(&[0x1b]);

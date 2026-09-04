@@ -2261,6 +2261,7 @@ async fn handle_filebrowser_key(
                             bytes_transferred: 0,
                             total_bytes: local_entry.size,
                             complete: false,
+                            started: Some(std::time::Instant::now()),
                         });
                         if let Some(Some(rt)) = runtimes.get(idx) {
                             match upload_file(
@@ -2319,6 +2320,7 @@ async fn handle_filebrowser_key(
                             bytes_transferred: 0,
                             total_bytes: remote_entry.size,
                             complete: false,
+                            started: Some(std::time::Instant::now()),
                         });
                         if let Some(Some(rt)) = runtimes.get(idx) {
                             match download_file(&rt.ssh_session.handle, &remote_src, &local_dest)
@@ -3141,6 +3143,18 @@ fn handle_monitor_key(
                 tui::host_monitor::ProcessSort::Memory => tui::host_monitor::ProcessSort::Cpu,
             };
             app.monitor_process_scroll = 0;
+        }
+        // SPEC §4. Grouping is the default because a worker pool is one fact
+        // about a machine; `g` gets the individual pids back when you need to
+        // act on one of them.
+        KeyCode::Char('g') => {
+            app.group_processes = !app.group_processes;
+            app.monitor_process_scroll = 0;
+            app.set_status(if app.group_processes {
+                "Identical processes grouped.".into()
+            } else {
+                "Showing every process.".into()
+            });
         }
         KeyCode::Down => {
             app.monitor_process_scroll = app.monitor_process_scroll.saturating_add(1);

@@ -215,7 +215,7 @@ pub fn bench_tui_frame() -> BenchResult {
         term.draw(|f| {
             let area = f.area();
             host_monitor::render(
-                f, area, &metrics, &cpu, &mem, &rx, &tx, &sort, 0, &peers, &theme,
+                f, area, &metrics, &cpu, &mem, &rx, &tx, &sort, 0, true, &peers, &theme,
             );
         })
         .expect("draw");

@@ -61,16 +61,6 @@ pub fn format_duration_short(secs: i64) -> String {
     }
 }
 
-/// Render a sparkline string from sample data using Unicode block characters.
-/// Values are normalized to max value in the dataset (or provided max).
-/// Render a horizontal bar gauge like "████████░░░░░░░░░ 45%"
-/// Returns a string of the bar portion (without the percentage).
-pub fn bar_gauge(pct: f64, width: usize) -> String {
-    let filled = ((pct / 100.0) * width as f64) as usize;
-    let empty = width.saturating_sub(filled);
-    format!("{}{}", "█".repeat(filled), "░".repeat(empty))
-}
-
 /// Get connection quality color.
 pub fn quality_color(theme: &Theme, quality: &str) -> Color {
     match quality {
@@ -105,11 +95,5 @@ mod tests {
         assert_eq!(format_uptime(3661234), "42d 9h 0m");
         assert_eq!(format_uptime(7380), "2h 3m");
         assert_eq!(format_uptime(300), "5m");
-    }
-
-    #[test]
-    fn test_bar_gauge() {
-        let bar = bar_gauge(50.0, 10);
-        assert_eq!(bar.chars().count(), 10);
     }
 }

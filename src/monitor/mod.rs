@@ -322,6 +322,71 @@ pub struct ProcessInfo {
     pub tty: String,
 }
 
+/// A run of identical processes, as one row.
+///
+/// Defect 7 of the v0.3.3 list: eleven of fifteen process rows were identical
+/// nginx workers, so the table spent its height saying one thing eleven
+/// times. Collapsing them is not cosmetic — it is the difference between a
+/// list of the busiest processes and a list of one process.
+#[derive(Clone, Debug)]
+pub struct Grouped {
+    /// The lowest pid in the run, which for a worker pool is the one that was
+    /// started first. Shown so a collapsed row is still something you can go
+    /// and look at.
+    pub pid: u32,
+    pub name: String,
+    pub cpu_pct: f64,
+    pub mem_pct: f64,
+    pub mem_rss_kb: u64,
+    /// How many processes this row stands for. 1 for an ordinary row.
+    pub siblings: usize,
+}
+
+impl Grouped {
+    /// The command, and how many of it, inside `width` cells.
+    ///
+    /// The `×N` is reserved before the name is cut. Appending it afterwards
+    /// truncates the count off the end of a long command, which turns a
+    /// collapsed row reporting 296% back into what reads as one process.
+    pub fn label(&self, width: usize) -> String {
+        if self.siblings <= 1 {
+            return crate::design::ellipsise(&self.name, width);
+        }
+        let tail = format!(" ×{}", self.siblings);
+        let room = width.saturating_sub(crate::design::width_of(&tail));
+        format!("{}{tail}", crate::design::ellipsise(&self.name, room))
+    }
+}
+
+/// Collapse identical commands into one row each, summing what they use.
+///
+/// Order is preserved: the caller has already sorted, and re-sorting here
+/// would make a table that is sorted by memory come back sorted by whatever
+/// this decided.
+pub fn collapse_siblings(procs: &[ProcessInfo]) -> Vec<Grouped> {
+    let mut out: Vec<Grouped> = Vec::with_capacity(procs.len());
+    for p in procs {
+        match out.iter_mut().find(|g| g.name == p.name) {
+            Some(g) => {
+                g.cpu_pct += p.cpu_pct;
+                g.mem_pct += p.mem_pct;
+                g.mem_rss_kb += p.mem_rss_kb;
+                g.siblings += 1;
+                g.pid = g.pid.min(p.pid);
+            }
+            None => out.push(Grouped {
+                pid: p.pid,
+                name: p.name.clone(),
+                cpu_pct: p.cpu_pct,
+                mem_pct: p.mem_pct,
+                mem_rss_kb: p.mem_rss_kb,
+                siblings: 1,
+            }),
+        }
+    }
+    out
+}
+
 impl ProcessInfo {
     /// Whether this process is in its terminal's foreground process group.
     ///
@@ -335,6 +400,80 @@ impl ProcessInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn proc(pid: u32, name: &str, cpu: f64, rss: u64) -> ProcessInfo {
+        ProcessInfo {
+            pid,
+            name: name.into(),
+            cpu_pct: cpu,
+            mem_pct: 0.5,
+            mem_rss_kb: rss,
+            state: "S".into(),
+            tty: "?".into(),
+        }
+    }
+
+    /// Defect 7 of the v0.3.3 list. Eleven of fifteen process rows were
+    /// identical nginx workers, which pushed the four processes that were not
+    /// a worker pool off the panel.
+    #[test]
+    fn identical_commands_collapse_into_one_row() {
+        let mut procs = vec![proc(99, "nginx: master process", 3.1, 1700)];
+        procs.extend((0..6).map(|i| proc(100 + i, "nginx: worker process", 0.5, 3000)));
+        procs.push(proc(200, "postgres: writer", 7.1, 210_000));
+
+        let rolled = collapse_siblings(&procs);
+        assert_eq!(rolled.len(), 3, "{rolled:?}");
+
+        let workers = rolled
+            .iter()
+            .find(|g| g.name.contains("worker"))
+            .expect("the worker row");
+        assert_eq!(workers.siblings, 6);
+        assert_eq!(workers.mem_rss_kb, 18_000, "RSS is not summed");
+        assert!((workers.cpu_pct - 3.0).abs() < 1e-9, "CPU is not summed");
+        assert_eq!(workers.pid, 100, "a collapsed row should name a real pid");
+    }
+
+    /// The caller has already sorted. Re-sorting here would make a table
+    /// ordered by memory come back ordered by whatever this decided.
+    #[test]
+    fn collapsing_preserves_the_order_it_was_given() {
+        let procs = vec![
+            proc(1, "c", 9.0, 1),
+            proc(2, "a", 5.0, 1),
+            proc(3, "a", 1.0, 1),
+            proc(4, "b", 2.0, 1),
+        ];
+        let rolled = collapse_siblings(&procs);
+        let names: Vec<&str> = rolled.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(names, vec!["c", "a", "b"]);
+    }
+
+    /// The `×N` is reserved before the name is cut, so a collapsed row
+    /// reporting 296% never reads as one process that is very busy.
+    #[test]
+    fn the_count_survives_a_column_too_narrow_for_the_name() {
+        let procs: Vec<_> = (0..3)
+            .map(|i| proc(i, "/usr/local/bin/a-very-long-command-name", 1.0, 1))
+            .collect();
+        let row = &collapse_siblings(&procs)[0];
+        for width in [8usize, 12, 20, 60] {
+            let label = row.label(width);
+            assert!(crate::design::width_of(&label) <= width, "{width}: {label}");
+            if width >= 8 {
+                assert!(label.ends_with("×3"), "{width}: {label}");
+            }
+        }
+    }
+
+    /// One of a thing is not a group, and must not be labelled as one.
+    #[test]
+    fn a_lone_process_gets_no_count() {
+        let row = &collapse_siblings(&[proc(1, "sshd", 0.1, 100)])[0];
+        assert_eq!(row.siblings, 1);
+        assert_eq!(row.label(40), "sshd");
+    }
 
     #[test]
     fn default_metric_state_claims_nothing() {

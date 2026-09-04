@@ -17,6 +17,7 @@ const WANTED_WIDTH: u16 = 100;
 pub fn render(
     f: &mut Frame,
     manager: &PortForwardManager,
+    host: &str,
     input: &str,
     adding: bool,
     theme: &Theme,
@@ -42,7 +43,13 @@ pub fn render(
         .iter()
         .filter(|f| f.state.is_active())
         .count();
-    let sub = format!("{} of {} active", active, manager.forwards.len());
+    // SPEC §3.4: whose forwards these are, and how many rules there are.
+    // "2 active" on a panel that could belong to any of nine sessions is a
+    // count without a subject.
+    let sub = format!(
+        "{host} · {} · {active} active",
+        crate::format::count(manager.forwards.len(), "rule")
+    );
 
     let inner = d::pane(
         f,
@@ -106,20 +113,35 @@ fn render_table(f: &mut Frame, area: Rect, manager: &PortForwardManager, theme: 
             };
 
             // Colour follows the evidence: green only when a listener exists.
+            //
+            // SPEC §3.4's LAST CHECK, said honestly. The reference calls it a
+            // probe time; nothing probes, because we own the listener and the
+            // bind result is the state (SPEC §6.3). So it reports when that
+            // result was established, in those words.
+            // `bound now ago` is not English. The zero case gets its own
+            // words rather than a unit nobody would say out loud.
+            let elapsed = fwd.state_since.elapsed().as_secs();
+            let since = if elapsed < 3 {
+                "just now".to_string()
+            } else {
+                format!("{} ago", crate::format::short_duration(elapsed))
+            };
             let (state_colour, detail) = match &fwd.state {
                 ForwardState::Active { connections } => (
                     theme.status_good,
                     match connections {
-                        0 => "bound · no connections yet".to_string(),
+                        0 => format!("bound {since} · no connections yet"),
                         n => format!(
-                            "bound · {}",
+                            "bound {since} · {}",
                             crate::format::count(*n as usize, "open connection")
                         ),
                     },
                 ),
                 // The retry key lives on the panel's bottom rule. Repeating
                 // it in the cell is what pushed the reason past the edge.
-                ForwardState::Failed { reason } => (theme.status_error, reason.clone()),
+                ForwardState::Failed { reason } => {
+                    (theme.status_error, format!("{reason} · {since}"))
+                }
                 ForwardState::Starting => (theme.status_warn, "binding…".to_string()),
             };
 
@@ -190,7 +212,7 @@ mod tests {
     fn screen(width: u16, height: u16, manager: &PortForwardManager, adding: bool) -> String {
         let theme = crate::theme::dark();
         let mut term = Terminal::new(TestBackend::new(width, height)).unwrap();
-        term.draw(|f| render(f, manager, "8080:localhost:80", adding, &theme))
+        term.draw(|f| render(f, manager, "web-02", "8080:localhost:80", adding, &theme))
             .unwrap();
         let buf = term.backend().buffer();
         (0..buf.area.height)
@@ -242,8 +264,12 @@ mod tests {
             "a failed forward claimed active:\n{s}"
         );
         assert!(
-            s.contains("0 of 1 active"),
-            "the panel should count what is actually bound:\n{s}"
+            s.contains("1 rule") && s.contains("0 active"),
+            "the panel should name the host and count what is bound:\n{s}"
+        );
+        assert!(
+            s.contains("web-02"),
+            "the panel does not say whose forwards these are:\n{s}"
         );
         // In full, not cut off at the panel edge: a clipped reason is the
         // add-forward hint's bug wearing a different hat.
