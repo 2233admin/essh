@@ -66,60 +66,47 @@ pub fn render(
     let card = Rect::new(x, y, width, height);
 
     f.render_widget(Clear, card);
+    // The panel idiom, like every other screen. SPEC §8 keeps `D` as the
+    // drill-down rather than deleting it, and a drill-down that opens v1
+    // chrome behind a v2 screen is half a redesign — the one thing the plan's
+    // risk table said not to discover during review.
     f.render_widget(
-        Block::default().style(Style::default().bg(theme.separator).fg(theme.text_primary)),
+        Block::default().style(Style::default().bg(theme.panel_alt).fg(theme.text_primary)),
         card,
     );
-
-    let inner = Rect {
-        x: card.x + 2,
-        y: card.y + 1,
-        width: card.width.saturating_sub(4),
-        height: card.height.saturating_sub(2),
-    };
-    // Content stops one row short of the hint.
+    let title = divergence.map(|d| d.host.clone()).unwrap_or_default();
+    let peer_set = divergence.map(|d| format!("vs {}", d.peer_set));
+    let inner = d::pane(
+        f,
+        card,
+        theme,
+        &d::PanelOpts {
+            title: (!title.is_empty()).then_some(title.as_str()),
+            sub: peer_set.as_deref(),
+            right: Some(platform),
+            focused: true,
+            foot_left: &[("⎋", " close"), ("D", " toggle")],
+            ..Default::default()
+        },
+    );
     let body_area = Rect {
-        height: inner.height.saturating_sub(1),
+        x: inner.x + 1,
+        width: inner.width.saturating_sub(2),
         ..inner
     };
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body_area);
-
-    if inner.height > 1 {
-        let hint = Rect {
-            x: inner.x,
-            y: inner.y + inner.height - 1,
-            width: inner.width,
-            height: 1,
-        };
-        f.render_widget(
-            Paragraph::new(d::footer_line(&[("⎋", "close"), ("D", "toggle")], theme)),
-            hint,
-        );
-    }
 }
 
 fn body<'a>(
     d: &'a HostDivergence,
     collectable: (usize, usize, usize),
     platform: &'a str,
-    // The divergence card is a raised modal, not a panel: it keeps its own
-    // fill and rule rather than the theme's, so nothing here reads the theme.
     theme: &Theme,
 ) -> Vec<Line<'a>> {
+    // The host and its peer set are the panel's own title and subtitle now,
+    // so the body does not repeat them. Printing a heading inside a box that
+    // already carries it is the same defect as a ratio printed twice.
     let mut lines = Vec::new();
-
-    lines.push(Line::from(vec![
-        Span::styled(
-            d.host.clone(),
-            Style::default()
-                .fg(theme.text_emphasis)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("  vs {}", d.peer_set),
-            Style::default().fg(theme.text_secondary),
-        ),
-    ]));
 
     // Never claim a facet count we did not attempt. On macOS several of the
     // seventeen simply do not exist, and saying "17 facets" would be a lie
