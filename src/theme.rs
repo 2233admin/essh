@@ -108,6 +108,21 @@ impl Theme {
         self.ramp(&crate::design::RAMP_OK, pct / 100.0, Color::Cyan)
     }
 
+    /// A meter whose cells are coloured by position along the utilisation
+    /// scale. SPEC §5.3.
+    ///
+    /// The ramp is named here rather than at the call site so a palette can
+    /// choose its own — `light` needs the severity hues darkened for contrast
+    /// on a light ground — and so `no_screen_paints_from_a_hardcoded_colour`
+    /// keeps meaning what it says.
+    pub fn utilisation_meter(
+        &self,
+        fraction: f64,
+        width: usize,
+    ) -> Vec<ratatui::text::Span<'static>> {
+        crate::design::meter_ramped(fraction, width, &crate::design::RAMP_UTIL, self)
+    }
+
     /// A 0-100 reading where high IS bad — capacity, utilisation.
     ///
     /// Stepped, not a ramp: a disk at 79% and one at 81% should look

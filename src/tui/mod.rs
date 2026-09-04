@@ -102,6 +102,10 @@ pub struct HostDisplay {
     pub diverge_count: Option<usize>,
     /// What the fleet sampler last read off this host. SPEC §6.1.
     pub vitals: HostVitals,
+    /// Sessions open on this host. Recomputed from the session manager each
+    /// frame rather than tracked, because two counters for one fact is how
+    /// they come to disagree.
+    pub session_count: usize,
 }
 
 /// Per-host readings from the fleet sampler.
@@ -526,6 +530,24 @@ impl App {
     /// needs one number in the list, and the broader group is the one whose
     /// consensus means the most.
     ///
+    /// Sessions per host, recomputed from the session manager.
+    ///
+    /// Derived rather than tracked. A count kept in two places is a count
+    /// that eventually disagrees with itself, and the v2 handoff's header,
+    /// SESS column and quick-connect panel are three readings of this one
+    /// fact — the handoff's own quick-connect list omits a host that has no
+    /// session, which is what that disagreement looks like.
+    pub fn recount_sessions_per_host(&mut self) {
+        for host in self.hosts.iter_mut() {
+            host.session_count = self
+                .session_manager
+                .sessions
+                .iter()
+                .filter(|s| s.hostname == host.hostname && s.port == host.port)
+                .count();
+        }
+    }
+
     /// A host with no facts keeps `diverge_count: None`. It is unprobed, and
     /// the list must not imply we checked it.
     pub fn recompute_divergence(&mut self) {
@@ -935,6 +957,7 @@ impl App {
 }
 
 pub fn render(frame: &mut Frame, app: &mut App) {
+    app.recount_sessions_per_host();
     match app.view {
         AppView::Launcher => {
             launcher_view::render(
@@ -1319,6 +1342,7 @@ mod tests {
             jump_host: None,
             diverge_count: None,
             vitals: Default::default(),
+            session_count: 0,
         }
     }
 
@@ -1504,6 +1528,7 @@ mod render_smoke {
             jump_host: None,
             diverge_count: None,
             vitals: Default::default(),
+            session_count: 0,
         };
         app.hosts = vec![
             host("web-01", "10.0.0.1", "deploy"),
@@ -1871,6 +1896,7 @@ mod search_selection_tests {
             jump_host: None,
             diverge_count: None,
             vitals: Default::default(),
+            session_count: 0,
         };
         app.hosts = vec![host("web-01"), host("db-01")];
         app

@@ -20,7 +20,8 @@
 //!
 //! Everything else — palette, ramps, box idiom, density, copy — is exact.
 
-use ratatui::style::Color;
+use ratatui::style::{Color, Style};
+use ratatui::text::Span;
 
 // ── Palette: the *Watch 2.0 family ───────────────────────────────────────
 // Replaces v1's Tokyo-Night-ish theme.
@@ -233,6 +234,63 @@ pub fn meter_flat(
     out
 }
 
+// ── Cells ────────────────────────────────────────────────────────────────
+
+/// Display width, in terminal cells.
+pub fn width_of(s: &str) -> usize {
+    unicode_width::UnicodeWidthStr::width(s)
+}
+
+/// Truncate to `width` cells, marking the cut.
+///
+/// The ellipsis is inside the budget, not added to it. A "truncation" that
+/// overruns its column by one cell is how a table starts pushing everything
+/// to its right off the screen.
+pub fn ellipsise(text: &str, width: usize) -> String {
+    if width_of(text) <= width {
+        return text.to_string();
+    }
+    if width <= 1 {
+        return "…".repeat(width);
+    }
+    let mut out = String::new();
+    let mut used = 0;
+    for c in text.chars() {
+        let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+        if used + w > width - 1 {
+            break;
+        }
+        out.push(c);
+        used += w;
+    }
+    out.push('…');
+    out
+}
+
+/// One left-aligned cell of exactly `width` cells.
+pub fn fit_left(text: &str, width: usize, style: Style) -> Vec<Span<'static>> {
+    let text = ellipsise(text, width);
+    let pad = width.saturating_sub(width_of(&text));
+    vec![Span::styled(text, style), Span::raw(" ".repeat(pad))]
+}
+
+/// One right-aligned cell of exactly `width` cells. Numbers go here.
+pub fn fit_right(text: &str, width: usize, style: Style) -> Vec<Span<'static>> {
+    let text = ellipsise(text, width);
+    let pad = width.saturating_sub(width_of(&text));
+    vec![Span::raw(" ".repeat(pad)), Span::styled(text, style)]
+}
+
+/// Pad a run of spans out to `width`, so a cell built from several styles
+/// still occupies its column exactly.
+pub fn pad_to(mut spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
+    let used: usize = spans.iter().map(|s| width_of(&s.content)).sum();
+    if used < width {
+        spans.push(Span::raw(" ".repeat(width - used)));
+    }
+    spans
+}
+
 // ── Sparklines ───────────────────────────────────────────────────────────
 
 const BRAILLE_DOTS: [[u8; 4]; 2] = [[0x01, 0x02, 0x04, 0x40], [0x08, 0x10, 0x20, 0x80]];
@@ -307,8 +365,8 @@ pub fn axis_ceiling(values: &[u64]) -> u64 {
 // ── Widgets ──────────────────────────────────────────────────────────────
 
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::style::Modifier;
+use ratatui::text::Line;
 use ratatui::widgets::Block;
 use ratatui::Frame;
 

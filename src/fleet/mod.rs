@@ -1,3 +1,6 @@
+pub mod pool;
+pub mod sampler;
+
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -247,5 +250,150 @@ mod tests {
         let result = FleetProber::probe_host("192.0.2.1", 1, Duration::from_millis(100)).await;
         assert!(!result.online);
         assert!(result.latency_ms.is_none());
+    }
+}
+
+/// The sampler against real hosts. SPEC §6.1.
+///
+/// The unit tests in `sampler` drive the parser and the schedule off canned
+/// output, which is the right place to assert both. They cannot tell you
+/// whether the command essh sends produces output essh can read, over a
+/// connection essh opens. That is the failure this module exists for, and it
+/// is the one that happened: the sampler held eight connections to the
+/// fixture fleet and every column still read a dash.
+///
+/// Requires the fixture fleet. Without it these say so and skip, rather than
+/// failing on a machine with no podman.
+#[cfg(test)]
+mod live {
+    use std::time::{Duration, Instant};
+
+    use super::pool::FleetPool;
+    use super::sampler::{FleetSampler, Outcome};
+    use crate::ssh::{AuthMethod, ConnectConfig};
+
+    const FLEET: [(&str, &str); 3] = [
+        ("web-02", "127.0.0.12"),
+        ("db-01", "127.0.0.14"),
+        ("build-01", "127.0.0.18"),
+    ];
+
+    fn key() -> std::path::PathBuf {
+        std::path::PathBuf::from(std::env::var("HOME").expect("HOME")).join(".ssh/id_ed25519")
+    }
+
+    fn reachable(ip: &str) -> bool {
+        use std::net::{SocketAddr, TcpStream};
+        let addr: SocketAddr = format!("{ip}:2222").parse().expect("addr");
+        TcpStream::connect_timeout(&addr, Duration::from_millis(600)).is_ok()
+    }
+
+    fn cfg(ip: &str) -> ConnectConfig {
+        ConnectConfig {
+            hostname: ip.to_string(),
+            port: 2222,
+            username: "matt".into(),
+            auth: AuthMethod::KeyFile {
+                path: key(),
+                passphrase: None,
+            },
+            timeout: Duration::from_secs(10),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_sampler_reads_real_hosts_with_no_session_open() {
+        if !FLEET.iter().all(|(_, ip)| reachable(ip)) {
+            eprintln!("SKIP: fixture fleet not up; run ./scripts/fleet.sh up");
+            return;
+        }
+
+        let pool = FleetPool::new();
+        let mut sampler = FleetSampler::new(Duration::from_millis(1), 8, 8);
+        let names: Vec<String> = FLEET.iter().map(|(n, _)| n.to_string()).collect();
+
+        // Two rounds: a CPU percentage needs two `/proc/stat` reads to
+        // difference, so one round would pass with `cpu_pct: None` and prove
+        // nothing.
+        let mut last = Vec::new();
+        for round in 0..2 {
+            let due = sampler.due(&names, Instant::now());
+            assert_eq!(
+                due.len(),
+                FLEET.len(),
+                "round {round}: not every host was due"
+            );
+
+            let mut raw = Vec::new();
+            for sweep in due {
+                let ip = FLEET
+                    .iter()
+                    .find(|(n, _)| *n == sweep.host)
+                    .map(|(_, ip)| *ip)
+                    .expect("host");
+                raw.push((sweep.host, pool.exec(&cfg(ip), &sweep.command).await));
+            }
+
+            last.clear();
+            for (host, out) in raw {
+                let outcome = sampler.record(&host, out, Instant::now());
+                last.push((host, outcome));
+            }
+            if round == 0 {
+                tokio::time::sleep(Duration::from_millis(600)).await;
+            }
+        }
+
+        for (host, outcome) in &last {
+            let Outcome::Read(sample) = outcome else {
+                panic!("{host}: the sampler could not read a live host: {outcome:?}");
+            };
+            assert!(
+                sample.cpu_pct.is_some(),
+                "{host}: no CPU after two sweeps — the sweep ran but nothing parsed"
+            );
+            assert!(sample.mem_pct.is_some_and(|m| m > 0.0), "{host}: no memory");
+            assert!(sample.disk_pct.is_some_and(|d| d > 0.0), "{host}: no disk");
+            assert!(sample.load1.is_some(), "{host}: no load average");
+            assert!(
+                sample.cores.is_some_and(|c| c > 0),
+                "{host}: no core count, so `load` cannot be related to `cpu%`"
+            );
+            assert!(
+                !sample.processes.is_empty(),
+                "{host}: no processes, so the health screen cannot attribute load"
+            );
+            let cpu = sample.cpu_pct.expect("cpu");
+            assert!(
+                (0.0..=100.0).contains(&cpu),
+                "{host}: cpu {cpu} is not a percentage"
+            );
+        }
+    }
+
+    /// SPEC §6.1 rule 2, and the reason the pool exists. A second sweep must
+    /// not cost a second handshake.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_second_sweep_reuses_the_connection() {
+        if !reachable(FLEET[0].1) {
+            eprintln!("SKIP: fixture fleet not up");
+            return;
+        }
+        let pool = FleetPool::new();
+        let c = cfg(FLEET[0].1);
+
+        let first = Instant::now();
+        pool.exec(&c, "echo one").await.expect("first exec");
+        let cold = first.elapsed();
+
+        let second = Instant::now();
+        pool.exec(&c, "echo two").await.expect("second exec");
+        let warm = second.elapsed();
+
+        assert!(
+            warm < cold,
+            "the second sweep cost as much as the first ({warm:?} vs {cold:?}): \
+             the connection is not being reused"
+        );
     }
 }

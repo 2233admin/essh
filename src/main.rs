@@ -81,6 +81,14 @@ struct TuiState {
     notification_matcher: NotificationMatcher,
     fleet_prober: fleet::FleetProber,
     fleet_probe_task: Option<FleetProbeTask>,
+    /// SPEC §6.1. Metrics for every configured host, not only the one with a
+    /// session on it.
+    fleet_sampler: fleet::sampler::FleetSampler,
+    fleet_pool: fleet::pool::FleetPool,
+    fleet_sample_task: Option<FleetSampleTask>,
+    /// Set once, the first time sampling is refused for a reason the user can
+    /// act on. Repeating it every five seconds would be a status bar.
+    fleet_sample_refusal: Option<String>,
     /// A connection the user asked for, to be made *after* the next draw.
     ///
     /// Connecting is awaited inline on the event loop, so the frame showing
@@ -91,6 +99,8 @@ struct TuiState {
 }
 
 type FleetProbeTask = tokio::task::JoinHandle<Vec<(String, u16, fleet::ProbeResult)>>;
+/// Host name, and the sweep's raw output or the reason there is none.
+type FleetSampleTask = tokio::task::JoinHandle<Vec<(String, Result<String, String>)>>;
 
 impl ReconnectTracker {
     fn new(max_retries: u32) -> Self {
@@ -924,6 +934,14 @@ async fn tui_main_loop(
             config.fleet.latency_history_samples,
         ),
         fleet_probe_task: None,
+        fleet_sampler: fleet::sampler::FleetSampler::new(
+            std::time::Duration::from_secs(config.fleet.sample_interval.max(1)),
+            config.fleet.sample_concurrency.max(1),
+            config.fleet.sample_processes,
+        ),
+        fleet_pool: fleet::pool::FleetPool::new(),
+        fleet_sample_task: None,
+        fleet_sample_refusal: None,
         pending_connect: None,
     };
 
@@ -1033,6 +1051,9 @@ async fn tui_main_loop(
                 )
                 .await?;
                 if handled == KeyAction::Quit {
+                    if let Some(task) = tui_state.fleet_sample_task.take() {
+                        task.abort();
+                    }
                     if let Some(task) = tui_state.fleet_probe_task.take() {
                         task.abort();
                     }
@@ -1101,6 +1122,22 @@ async fn tui_main_loop(
                         } else {
                             app.set_status(format!("restoring {} — {} of {}", name, done, total));
                         }
+                    }
+                }
+
+                if let Some(task) = tui_state.fleet_sample_task.take() {
+                    if task.is_finished() {
+                        if let Ok(results) = task.await {
+                            let now = std::time::Instant::now();
+                            for (name, raw) in results {
+                                let outcome = tui_state.fleet_sampler.record(&name, raw, now);
+                                if let Some(host) = app.hosts.iter_mut().find(|h| h.name == name) {
+                                    apply_sample(host, &outcome, now);
+                                }
+                            }
+                        }
+                    } else {
+                        tui_state.fleet_sample_task = Some(task);
                     }
                 }
 
@@ -1356,6 +1393,86 @@ async fn tui_main_loop(
                         Err(_) => {
                             // Will retry on next tick cycle
                         }
+                    }
+                }
+
+                // ── Fleet metrics (SPEC §6.1) ────────────────────────
+                //
+                // Separate from the reachability probe above and on a much
+                // shorter cycle: "is it up" is a TCP connect every 60s, "how
+                // busy is it" is an exec every 5s over a warm connection. The
+                // sampler decides which hosts are due and caps how many go at
+                // once; this only turns that list into work.
+                if config.fleet.sample_enabled && tui_state.fleet_sample_task.is_none() {
+                    let names: Vec<String> = app.hosts.iter().map(|h| h.name.clone()).collect();
+                    let now = std::time::Instant::now();
+                    let due = tui_state.fleet_sampler.due(&names, now);
+
+                    // Rule 2 of the pool: a host you already have a session
+                    // on costs no second connection. `SshSession.handle` is
+                    // an `Arc` for exactly this. Done here rather than at
+                    // connect time so the pool never has to be threaded
+                    // through the connection path.
+                    for (i, rt) in runtimes.iter().enumerate() {
+                        let Some(rt) = rt else { continue };
+                        let Some(session) = app.session_manager.sessions.get(i) else {
+                            continue;
+                        };
+                        tui_state
+                            .fleet_pool
+                            .adopt(
+                                &session.hostname,
+                                session.port,
+                                rt.ssh_session.handle.clone(),
+                            )
+                            .await;
+                    }
+
+                    let mut jobs = Vec::new();
+                    for sweep in due {
+                        let Some(host) = app.hosts.iter().find(|h| h.name == sweep.host) else {
+                            continue;
+                        };
+                        match sampler_connect_config(&config, host) {
+                            Ok(cfg) => jobs.push((sweep.host, cfg, sweep.command)),
+                            Err(why) => {
+                                // Recorded as a failure so the host backs off
+                                // rather than being retried every cycle with
+                                // credentials that will never work.
+                                tui_state
+                                    .fleet_sampler
+                                    .record(&sweep.host, Err(why.clone()), now);
+                                if let Some(h) = app.hosts.iter_mut().find(|h| h.name == sweep.host)
+                                {
+                                    h.vitals.unreadable = Some(why.clone());
+                                }
+                                // Said once. Every five seconds is a status
+                                // bar, not a message.
+                                if tui_state.fleet_sample_refusal.is_none() {
+                                    tui_state.fleet_sample_refusal = Some(why.clone());
+                                    app.set_status(format!("host metrics unavailable: {why}"));
+                                }
+                            }
+                        }
+                    }
+
+                    if !jobs.is_empty() {
+                        let pool = tui_state.fleet_pool.share();
+                        let limit = config.fleet.sample_concurrency.max(1);
+                        tui_state.fleet_sample_task = Some(tokio::spawn(async move {
+                            use futures::stream::StreamExt;
+                            futures::stream::iter(jobs)
+                                .map(|(name, cfg, cmd)| {
+                                    let pool = pool.share();
+                                    async move {
+                                        let out = pool.exec(&cfg, &cmd).await;
+                                        (name, out)
+                                    }
+                                })
+                                .buffer_unordered(limit)
+                                .collect::<Vec<_>>()
+                                .await
+                        }));
                     }
                 }
 
@@ -2782,13 +2899,38 @@ async fn handle_dashboard_key(
             apply_probe_state(app, &tui_state.fleet_prober);
             app.set_status("Config reloaded. Probe results kept.".to_string());
         }
-        // One release of migration. Doing either action silently is how the
-        // original confusion started.
+        // SPEC §4.3 — `r` is uniformly reconnect or retry: on a dropped
+        // session, an offline host row, a stale card, and a failed forward.
+        //
+        // It spent one release refusing to act, because v0.3.3 advertised it
+        // as probe and performed a reload. The migration is over and the key
+        // has one meaning again, which is the meaning the footer prints.
         KeyCode::Char('r') => {
-            app.set_status(
-                "`r` is now three keys: p probe host · P probe fleet · R reload config."
-                    .to_string(),
-            );
+            let Some(host) = app.selected_host().cloned() else {
+                app.set_status("No host selected.".to_string());
+                return Ok(KeyAction::Handled);
+            };
+            if tui_state.fleet_probe_task.is_some() {
+                app.set_status("Already retrying.".to_string());
+                return Ok(KeyAction::Handled);
+            }
+            // Both halves, or the key looks like it half worked: reachability
+            // comes back from the probe, and the numbers only come back if
+            // the sampler stops backing off.
+            tui_state
+                .fleet_sampler
+                .retry_now(&host.name, std::time::Instant::now());
+            tui_state.fleet_pool.forget(&host.hostname, host.port).await;
+            let timeout = tui_state.fleet_prober.probe_timeout();
+            let target = vec![(host.hostname.clone(), host.port)];
+            tui_state.fleet_probe_task = Some(tokio::spawn(async move {
+                fleet::FleetProber::probe_hosts(target, timeout).await
+            }));
+            let word = match host.state() {
+                tui::HostState::Dropped => "Reconnecting to",
+                _ => "Retrying",
+            };
+            app.set_status(format!("{word} {}…", host.name));
         }
         KeyCode::Char('d') => {
             // Deleting a host rewrites the user's config file and drops the
@@ -4569,6 +4711,100 @@ fn select_host(app: &mut App, hostname: &str, port: u16) {
     }
 }
 
+// ── Fleet metrics (SPEC §6.1) ────────────────────────────────────────────
+
+/// A connect config the sampler is allowed to use, or the reason there is
+/// none.
+///
+/// Deliberately narrower than the interactive path: it takes the first
+/// configured key that opens without a passphrase, or the agent, and refuses
+/// everything else. A background sweep cannot prompt, and a sweep that hangs
+/// waiting for a prompt nobody can see is worse than a row that says why it
+/// is blank.
+fn sampler_connect_config(config: &AppConfig, host: &HostDisplay) -> Result<ConnectConfig, String> {
+    let host_entry = config
+        .hosts
+        .iter()
+        .find(|e| e.hostname == host.hostname && e.port == host.port);
+
+    let username = if !host.user.is_empty() {
+        host.user.clone()
+    } else {
+        host_entry
+            .and_then(|e| e.user.clone())
+            .or_else(|| config.general.default_user.clone())
+            .unwrap_or_else(whoami)
+    };
+
+    let candidates = configured_auth_methods_for(
+        (!host.name.is_empty()).then_some(host.name.as_str()),
+        host_entry.and_then(|entry| entry.key.as_deref()),
+        config.general.default_key.as_deref(),
+        ssh_agent_available(),
+    )
+    .map_err(|e| e.to_string())?;
+
+    let mut refusal = "no key configured and no ssh-agent".to_string();
+    for candidate in candidates {
+        match fleet::pool::Auth::for_sampling(&candidate) {
+            Ok(auth) => {
+                return Ok(ConnectConfig {
+                    hostname: host.hostname.clone(),
+                    port: host.port,
+                    username,
+                    auth,
+                    timeout: config.connect_timeout(),
+                })
+            }
+            Err(why) => refusal = why,
+        }
+    }
+    Err(refusal)
+}
+
+/// Put one sweep's outcome onto the host list.
+///
+/// An unreachable host keeps its last reading: SPEC §1 says a dropped host
+/// shows what it last said, labelled as the last reading, and throwing the
+/// values away here would leave the card with nothing to label.
+fn apply_sample(
+    host: &mut HostDisplay,
+    outcome: &fleet::sampler::Outcome,
+    now: std::time::Instant,
+) {
+    match outcome {
+        fleet::sampler::Outcome::Read(sample) => {
+            // The sustained CPU threshold of SPEC §1 rule 3 lives here,
+            // because it is the only place that sees consecutive readings.
+            // Clearing the mark the moment CPU drops is what stops one spike
+            // from parking a host in `busy`.
+            let over = sample.cpu_pct.is_some_and(|c| c >= tui::CPU_BUSY_PCT);
+            host.vitals.cpu_over_since = match (over, host.vitals.cpu_over_since) {
+                (true, Some(since)) => Some(since),
+                (true, None) => Some(now),
+                (false, _) => None,
+            };
+            host.vitals.cpu_pct = sample.cpu_pct;
+            host.vitals.mem_pct = sample.mem_pct;
+            host.vitals.disk_pct = sample.disk_pct;
+            host.vitals.load1 = sample.load1;
+            host.vitals.cores = sample.cores;
+            host.vitals.sampled_at = Some(now);
+            host.vitals.unreadable = None;
+        }
+        fleet::sampler::Outcome::Unreadable(why) => {
+            host.vitals.unreadable = Some(why.clone());
+            host.vitals.cpu_over_since = None;
+        }
+        fleet::sampler::Outcome::Unreachable(_) => {
+            // Reachability is the prober's to report. A failed exec is
+            // evidence about this connection, not about the host, and two
+            // sources disagreeing about whether a machine is up is the defect
+            // SPEC §1 exists to prevent.
+        }
+    }
+}
+
 /// Copy live probe state onto the host list.
 ///
 /// Reachability and RTT are measured by the prober and held in `TuiState`;
@@ -4661,6 +4897,7 @@ fn load_hosts_into_app(app: &mut App, config: &AppConfig) -> anyhow::Result<()> 
                     jump_host,
                     diverge_count: None,
                     vitals: Default::default(),
+                    session_count: 0,
                 });
             }
         }
@@ -4690,6 +4927,7 @@ fn load_hosts_into_app(app: &mut App, config: &AppConfig) -> anyhow::Result<()> 
                 jump_host: entry.jump_host.clone().filter(|j| !j.is_empty()),
                 diverge_count: None,
                 vitals: Default::default(),
+                session_count: 0,
             });
         }
     }
@@ -5957,6 +6195,7 @@ fn host_display_for_candidate(c: &launcher::Candidate) -> HostDisplay {
         jump_host: None,
         diverge_count: None,
         vitals: Default::default(),
+        session_count: 0,
     }
 }
 
@@ -6031,6 +6270,7 @@ async fn restore_one_session(
             jump_host: None,
             diverge_count: None,
             vitals: Default::default(),
+            session_count: 0,
         },
     };
     if let Some(u) = &session.user {

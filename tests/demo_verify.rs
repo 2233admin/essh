@@ -314,16 +314,37 @@ fn the_demo_beats_match_the_spec() {
     let hosts = tui.frame("4 · hosts");
     universal_rules(&hosts, "hosts");
 
-    // SPEC §1 — a host with no facets says so; it is never a zero.
+    // SPEC §6.1 — the hosts screen shows readings for hosts with no session
+    // open, which is the thing the app could not do before v2. Eight of the
+    // ten on screen have no session, so a table of dashes here means the
+    // fleet sampler connected and nothing parsed.
+    let measured = hosts
+        .lines()
+        .filter(|l| l.contains('%') && l.contains("127.0.0."))
+        .count();
     assert!(
-        hosts.contains("never probed"),
-        "unprobed hosts must say so in words:\n{hosts}"
+        measured >= 8,
+        "only {measured} host rows carry a reading; the fleet sampler is not \
+         filling the table:\n{hosts}"
     );
 
-    // SPEC §7 — the footer teaches the split, not the key that lied.
+    // SPEC §6.1 — and never a zero for a reading we do not have. A row is
+    // either measured or it says `—`.
+    for line in hosts.lines().filter(|l| l.contains("127.0.0.")) {
+        assert!(
+            line.contains('%') || line.contains('—'),
+            "a host row shows neither a reading nor a dash:\n{line}"
+        );
+    }
+
+    // SPEC §4.3 — `r` is reconnect or retry, and the footer says so.
     assert!(
-        hosts.contains(" probe") && hosts.contains("reload"),
-        "the footer must advertise probe and reload separately:\n{hosts}"
+        hosts.contains("r reconnect"),
+        "the hosts footer must advertise `r` as reconnect:\n{hosts}"
+    );
+    assert!(
+        !hosts.contains("r probe") && !hosts.contains("r reload"),
+        "`r` is advertised as probe or reload again:\n{hosts}"
     );
 
     // ── beat 6 · walk the hosts list to the outlier ──────────────────────
@@ -350,13 +371,13 @@ fn the_demo_beats_match_the_spec() {
     let picked = tui.frame("6 · edge-01 under the cursor");
     universal_rules(&picked, "hosts cursor");
 
-    // ── beat 7 · the probe / reload split ────────────────────────────────
+    // ── beat 7 · `r` retries, and `R` keeps the measurements ─────────────
     tui.type_text("r");
-    tui.settle(900);
-    let migrated = tui.frame("7 · bare r reports the split");
+    tui.settle(1200);
+    let retried = tui.frame("7 · r retries the selected host");
     assert!(
-        migrated.contains("p probe host") || migrated.contains("three keys"),
-        "bare `r` must report the split rather than act:\n{migrated}"
+        retried.contains("Retrying") || retried.contains("Reconnecting"),
+        "`r` must retry the host under the cursor:\n{retried}"
     );
 
     tui.type_text("R");

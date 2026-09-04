@@ -172,6 +172,7 @@ mod tests {
             jump_host: None,
             diverge_count: None,
             vitals,
+            session_count: 0,
         }
     }
 

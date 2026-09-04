@@ -219,6 +219,21 @@ pub struct FleetConfig {
     pub probe_interval: u64,
     pub probe_timeout: u64,
     pub latency_history_samples: usize,
+    /// Whether to collect cpu, memory and disk for hosts with no session
+    /// open. SPEC §6.1, and the data the hosts and health screens are built
+    /// on. Off means those columns read `—` and say why, which is the honest
+    /// state rather than a broken one.
+    pub sample_enabled: bool,
+    /// Seconds between sweeps of one host.
+    ///
+    /// 5 is right for a dashboard and wrong for two hundred hosts, which is
+    /// why it is here and why the config panel shows it. `sample_concurrency`
+    /// bounds the burst either way.
+    pub sample_interval: u64,
+    /// How many sweeps may be in flight at once.
+    pub sample_concurrency: usize,
+    /// Processes kept per host, for the health screen's fleet-wide list.
+    pub sample_processes: usize,
 }
 
 impl Default for FleetConfig {
@@ -228,6 +243,10 @@ impl Default for FleetConfig {
             probe_interval: 60,
             probe_timeout: 5,
             latency_history_samples: 30,
+            sample_enabled: true,
+            sample_interval: 5,
+            sample_concurrency: 8,
+            sample_processes: 8,
         }
     }
 }
