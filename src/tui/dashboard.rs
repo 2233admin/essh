@@ -1,10 +1,10 @@
 use crate::design as d;
-use crate::session::{Session, SessionState};
+use crate::session::Session;
 use crate::theme::Theme;
 use crate::tui::widgets;
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState},
+    widgets::{Block, Borders, Clear, Paragraph, TableState},
 };
 
 /// Render the dashboard view (no active session focused)
@@ -13,6 +13,11 @@ pub fn render(
     f: &mut Frame,
     area: Rect,
     sessions: &[Session],
+    session_rows: &[SessionRow],
+    quick: &[QuickHost],
+    activity: &[super::activity::Event],
+    broadcast: &super::broadcast::Broadcast,
+    sessions_panel: super::SessionsPanel,
     hosts: &[super::HostDisplay],
     filtered_indices: &[usize],
     selected_host: usize,
@@ -60,9 +65,17 @@ pub fn render(
     );
 
     match active_tab {
-        super::DashboardTab::Sessions => {
-            render_sessions_tab(f, chunks[2], sessions, selected_session, theme)
-        }
+        super::DashboardTab::Sessions => render_sessions_tab(
+            f,
+            chunks[2],
+            session_rows,
+            quick,
+            activity,
+            broadcast,
+            sessions_panel,
+            selected_session,
+            theme,
+        ),
         super::DashboardTab::Hosts => {
             // One full-width panel. v1 filled the space under a short host
             // list with a groups panel, which was the fleet-consensus screen
@@ -116,84 +129,101 @@ fn render_header(
     f.render_widget(Paragraph::new(line), area);
 }
 
+/// Screen 1 — sessions. The screen v2 opens on.
+///
+/// Sessions are the primary object and hosts are how you get more of them,
+/// which is the whole rearrangement: v1 opened on a host list and made you
+/// find your way to what you were already running.
+#[allow(clippy::too_many_arguments)]
 fn render_sessions_tab(
     f: &mut Frame,
     area: Rect,
-    sessions: &[Session],
+    app_sessions: &[SessionRow],
+    quick: &[QuickHost],
+    activity: &[super::activity::Event],
+    broadcast: &super::broadcast::Broadcast,
+    focus: super::SessionsPanel,
     selected: usize,
     theme: &Theme,
 ) {
-    if sessions.is_empty() {
-        let msg = Paragraph::new(vec![
-            Line::raw(""),
-            Line::styled(
-                "  No active sessions.",
-                Style::default().fg(theme.text_muted),
-            ),
-            Line::raw(""),
-            Line::styled(
-                "  Press [2] to browse hosts, or use 'essh connect <host>' to start a session.",
-                Style::default().fg(theme.text_muted),
-            ),
+    // The table takes what it needs and the row of three takes the rest, up
+    // to what its own content wants. A panel stretched over empty space reads
+    // as missing data.
+    let table_height = ((app_sessions.len().max(1) as u16) + 3).min(area.height / 2);
+    let row_height = quick
+        .len()
+        .max(activity.len())
+        .max(broadcast.replies.len() + 3)
+        .max(4) as u16
+        + 4;
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(table_height),
+            Constraint::Length(1),
+            Constraint::Length(row_height.min(area.height.saturating_sub(table_height + 1))),
+            Constraint::Min(0),
         ])
-        .block(
-            Block::bordered()
-                .title("Active Sessions")
-                .border_style(Style::default().fg(theme.border)),
-        );
-        f.render_widget(msg, area);
-        return;
-    }
+        .split(area);
 
-    let header = Row::new(vec![
-        Cell::from(" # ").style(Style::default().fg(theme.brand).bold()),
-        Cell::from("Label").style(Style::default().fg(theme.brand).bold()),
-        Cell::from("Host").style(Style::default().fg(theme.brand).bold()),
-        Cell::from("User").style(Style::default().fg(theme.brand).bold()),
-        Cell::from("Status").style(Style::default().fg(theme.brand).bold()),
-        Cell::from("Uptime").style(Style::default().fg(theme.brand).bold()),
-    ])
-    .height(1);
+    render_session_table(f, rows[0], app_sessions, focus, selected, theme);
 
-    let rows: Vec<Row> = sessions
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Ratio(1, 3),
+            Constraint::Length(2),
+            Constraint::Ratio(1, 3),
+            Constraint::Length(2),
+            Constraint::Min(20),
+        ])
+        .split(rows[2]);
+    render_quick_connect(f, cols[0], quick, focus, theme);
+    render_broadcast(f, cols[2], broadcast, focus, theme);
+    render_activity(f, cols[4], activity, theme);
+}
+
+/// One row of the sessions table, flattened out of the app so the renderer
+/// takes data rather than five collections and an index.
+pub struct SessionRow {
+    pub number: usize,
+    pub host: String,
+    pub state: &'static str,
+    pub host_state: super::HostState,
+    pub running: Option<String>,
+    pub up: String,
+    pub cpu_pct: Option<f64>,
+    pub last_line: Option<String>,
+    pub idle: String,
+    pub dropped: bool,
+}
+
+/// A host with no session, for the quick-connect panel.
+pub struct QuickHost {
+    pub name: String,
+    pub state: super::HostState,
+}
+
+const SESSION_GAP: usize = 2;
+
+fn render_session_table(
+    f: &mut Frame,
+    area: Rect,
+    sessions: &[SessionRow],
+    focus: super::SessionsPanel,
+    selected: usize,
+    theme: &Theme,
+) {
+    let hosts = sessions
         .iter()
-        .enumerate()
-        .map(|(i, s)| {
-            let state_style = match &s.state {
-                SessionState::Active => Style::default().fg(theme.status_good),
-                SessionState::Suspended => Style::default().fg(theme.text_muted),
-                SessionState::Reconnecting { .. } => Style::default().fg(theme.status_error),
-                SessionState::Connecting => Style::default().fg(theme.status_warn),
-                SessionState::Disconnected { .. } => Style::default().fg(theme.status_error),
-            };
-            let status_text = match &s.state {
-                SessionState::Active => "● Active",
-                SessionState::Suspended => "● Suspended",
-                SessionState::Reconnecting { .. } => "● Recon.",
-                SessionState::Connecting => "● Connecting",
-                SessionState::Disconnected { .. } => "● Disconnected",
-            };
-
-            Row::new(vec![
-                Cell::from(format!(" {} ", i + 1)),
-                Cell::from(s.label.clone()),
-                Cell::from(s.hostname.clone()),
-                Cell::from(s.username.clone()),
-                Cell::from(status_text).style(state_style),
-                Cell::from(widgets::format_duration_short(s.uptime_secs() as i64)),
-            ])
-        })
-        .collect();
-
-    let widths = [
-        Constraint::Length(4),
-        Constraint::Percentage(20),
-        Constraint::Percentage(25),
-        Constraint::Percentage(15),
-        Constraint::Percentage(15),
-        Constraint::Percentage(15),
-    ];
-
+        .map(|s| s.host.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let sub = format!(
+        "{} open on {} · Ctrl+A 1-9 jumps",
+        crate::format::count(sessions.len(), "session"),
+        crate::format::count(hosts, "host")
+    );
     let inner = d::pane(
         f,
         area,
@@ -201,26 +231,494 @@ fn render_sessions_tab(
         &d::PanelOpts {
             key: Some("1"),
             title: Some("sessions"),
-            sub: Some(&format!("{}", sessions.len())),
-            foot_left: &[("↑↓", " select"), ("↵", " attach"), ("w", " close")],
+            sub: Some(&sub),
+            right: Some("detached survive restarts"),
+            focused: focus == super::SessionsPanel::Table,
+            foot_left: &[
+                ("↑↓", " select"),
+                ("⏎", " attach"),
+                ("d", " detach"),
+                ("n", " new"),
+                ("w", " close"),
+                ("⇥", " next panel"),
+            ],
             ..Default::default()
         },
     );
+    if inner.width < 40 || inner.height == 0 {
+        return;
+    }
 
-    let table = Table::new(rows, widths)
-        .header(header)
-        // Background and weight only. Setting a foreground here would repaint
-        // the whole row one colour, so the selected session would lose the
-        // status colour that says whether it is alive — the row you are
-        // looking at becomes the one row you cannot read the state of.
-        .row_highlight_style(Style::default().bg(theme.selection_bg).bold())
-        .highlight_symbol("▌ ");
+    if sessions.is_empty() {
+        f.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(
+                    "no sessions open",
+                    Style::default().fg(theme.text_secondary),
+                ),
+                Span::styled(" · press ", Style::default().fg(theme.text_muted)),
+                Span::styled("2", Style::default().fg(theme.key_hint)),
+                Span::styled(
+                    " for hosts, or ⇥ then a number to open one",
+                    Style::default().fg(theme.text_muted),
+                ),
+            ])),
+            inner,
+        );
+        return;
+    }
 
-    // Stateful, or the highlight is configured and never applied — which is
-    // why this list had no visible cursor at all.
-    let mut state = ratatui::widgets::TableState::default();
-    state.select(Some(selected.min(sessions.len().saturating_sub(1))));
-    f.render_stateful_widget(table, inner, &mut state);
+    let cols = SessionCols::fit(inner.width as usize);
+    let mut lines = vec![Line::from(cols.header(theme))];
+    for (i, s) in sessions.iter().take(inner.height as usize - 1).enumerate() {
+        let on = i == selected && focus == super::SessionsPanel::Table;
+        lines.push(Line::from(cols.row(s, on, theme)).style(if on {
+            Style::default().bg(theme.selection_bg)
+        } else {
+            Style::default()
+        }));
+    }
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+/// SPEC §3.1's budget. HOST is 15, not the handoff's 13: `staging-web-01` is
+/// fourteen characters and the hosts table already budgets 15 for the same
+/// value.
+struct SessionCols {
+    num: usize,
+    host: usize,
+    state: usize,
+    running: usize,
+    up: usize,
+    cpu: usize,
+    last: usize,
+    idle: usize,
+}
+
+impl SessionCols {
+    fn fit(width: usize) -> Self {
+        let mut c = SessionCols {
+            num: 3,
+            host: 15,
+            state: 9,
+            running: 11,
+            up: 8,
+            cpu: 7,
+            last: 0,
+            idle: 9,
+        };
+        // LAST LINE is the column the screen exists for, so it takes what is
+        // left and everything else gives way to it in the order SPEC §3.6
+        // sets: UP, then CPU, then IDLE.
+        let fixed =
+            |c: &SessionCols| c.num + 1 + c.host + c.state + c.running + c.up + c.cpu + c.idle;
+        let gaps = |c: &SessionCols| {
+            SESSION_GAP
+                * (2 + [c.host, c.state, c.running, c.up, c.cpu, c.idle]
+                    .iter()
+                    .filter(|w| **w > 0)
+                    .count())
+        };
+        for drop in 0..4 {
+            match drop {
+                1 => c.up = 0,
+                2 => c.cpu = 0,
+                3 => c.idle = 0,
+                _ => {}
+            }
+            if width > fixed(&c) + gaps(&c) + 12 {
+                c.last = width - fixed(&c) - gaps(&c);
+                return c;
+            }
+        }
+        c.last = width.saturating_sub(fixed(&c) + gaps(&c));
+        c
+    }
+
+    fn header(&self, t: &Theme) -> Vec<Span<'static>> {
+        let mut out: Vec<Span> = Vec::new();
+        let muted = Style::default().fg(t.text_muted);
+        out.extend(d::fit_right("#", self.num, muted));
+        // The gap, the dot column the selection marker replaces, and the gap
+        // after it. Counting the second gap is the difference between a
+        // header that sits over its column and one that sits two cells left
+        // of it.
+        out.push(Span::raw(" ".repeat(SESSION_GAP + 1 + SESSION_GAP)));
+        let mut push = |label: &str, w: usize, right: bool| {
+            if w == 0 {
+                return;
+            }
+            if right {
+                out.extend(d::fit_right(label, w, muted));
+            } else {
+                out.extend(d::fit_left(label, w, muted));
+            }
+            out.push(Span::raw(" ".repeat(SESSION_GAP)));
+        };
+        push("HOST", self.host, false);
+        push("STATE", self.state, false);
+        push("RUNNING", self.running, false);
+        push("UP", self.up, true);
+        push("CPU", self.cpu, true);
+        // LAST LINE trails a gap only when IDLE follows it. Trailing one
+        // unconditionally spends two cells the budget did not allow for, at
+        // exactly the widths where IDLE has already been dropped for lack of
+        // room.
+        if self.last > 0 {
+            out.extend(d::fit_left("LAST LINE", self.last, muted));
+            if self.idle > 0 {
+                out.push(Span::raw(" ".repeat(SESSION_GAP)));
+            }
+        }
+        if self.idle > 0 {
+            out.extend(d::fit_right("IDLE", self.idle, muted));
+        }
+        out
+    }
+
+    fn row(&self, s: &SessionRow, selected: bool, t: &Theme) -> Vec<Span<'static>> {
+        let mut out = d::fit_right(
+            &s.number.to_string(),
+            self.num,
+            Style::default()
+                .fg(if selected { t.brand } else { t.text_muted })
+                .add_modifier(if selected {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+        );
+        out.push(Span::raw(" ".repeat(SESSION_GAP)));
+        // The host's state, not the session's: trouble on the machine is
+        // visible from the session list without leaving it.
+        out.push(if selected {
+            Span::styled("▌", Style::default().fg(t.brand))
+        } else {
+            Span::styled(
+                s.host_state.glyph(),
+                Style::default().fg(s.host_state.color(t)),
+            )
+        });
+        out.push(Span::raw(" ".repeat(SESSION_GAP)));
+
+        let mut push = |spans: Vec<Span<'static>>, w: usize| {
+            if w == 0 {
+                return;
+            }
+            out.extend(spans);
+            out.push(Span::raw(" ".repeat(SESSION_GAP)));
+        };
+        push(
+            d::fit_left(
+                &s.host,
+                self.host,
+                Style::default().fg(if selected {
+                    t.text_emphasis
+                } else {
+                    t.text_primary
+                }),
+            ),
+            self.host,
+        );
+        // `detached` is normal and unalarming: it is what the tool is for.
+        let state_colour = match s.state {
+            "attached" => t.status_good,
+            "dropped" => t.status_error,
+            "opening" => t.status_warn,
+            _ => t.text_muted,
+        };
+        push(
+            d::fit_left(s.state, self.state, Style::default().fg(state_colour)),
+            self.state,
+        );
+        push(
+            d::fit_left(
+                s.running.as_deref().unwrap_or("—"),
+                self.running,
+                Style::default().fg(if s.running.is_some() {
+                    t.text_primary
+                } else {
+                    t.absent
+                }),
+            ),
+            self.running,
+        );
+        push(
+            d::fit_right(&s.up, self.up, Style::default().fg(t.text_secondary)),
+            self.up,
+        );
+        push(
+            d::fit_right(
+                &s.cpu_pct
+                    .map(|c| format!("{c:.1}%"))
+                    .unwrap_or_else(|| "—".into()),
+                self.cpu,
+                Style::default().fg(match s.cpu_pct {
+                    // A dropped session has no live tree, so this is `—`, and
+                    // a stale percentage in a live column is the defect the
+                    // whole state model exists to stop.
+                    None => t.absent,
+                    Some(c) => t.bounded_bad(c),
+                }),
+            ),
+            self.cpu,
+        );
+
+        // The column the screen is for: what a detached session is doing,
+        // without attaching to it.
+        let (last, last_style) = match (&s.last_line, s.dropped) {
+            (_, true) => (
+                "connection reset · r reconnect, scrollback kept".to_string(),
+                Style::default().fg(t.status_error),
+            ),
+            (Some(l), _) => (l.clone(), Style::default().fg(t.text_secondary)),
+            (None, _) => ("—".into(), Style::default().fg(t.absent)),
+        };
+        if self.last > 0 {
+            out.extend(d::fit_left(&last, self.last, last_style));
+            if self.idle > 0 {
+                out.push(Span::raw(" ".repeat(SESSION_GAP)));
+            }
+        }
+        if self.idle > 0 {
+            out.extend(d::fit_right(
+                &s.idle,
+                self.idle,
+                Style::default().fg(t.text_muted),
+            ));
+        }
+        out
+    }
+}
+
+/// Panel 2 — the hosts you have no session on, numbered.
+///
+/// Hosts that already have one are absent by design: they are in the table
+/// above. The handoff's own list omits a host that has none, which is what
+/// happens when the two are written down separately instead of derived.
+fn render_quick_connect(
+    f: &mut Frame,
+    area: Rect,
+    quick: &[QuickHost],
+    focus: super::SessionsPanel,
+    theme: &Theme,
+) {
+    let focused = focus == super::SessionsPanel::QuickConnect;
+    let inner = d::pane(
+        f,
+        area,
+        theme,
+        &d::PanelOpts {
+            key: Some("2"),
+            title: Some("quick connect"),
+            sub: Some(&crate::format::count(quick.len(), "host")),
+            focused,
+            foot_left: if focused {
+                &[("1-9", " open"), ("⇥", " next panel")]
+            } else {
+                &[("⇥", " focus")]
+            },
+            ..Default::default()
+        },
+    );
+    if inner.width < 12 || inner.height == 0 {
+        return;
+    }
+
+    let mut lines: Vec<Line> = Vec::new();
+    if quick.is_empty() {
+        lines.push(d::none_line("every host has a session", theme));
+    }
+    let room = inner.height as usize;
+    for (i, h) in quick.iter().take(room.saturating_sub(1)).enumerate() {
+        let reachable = h.state.recovery().is_none();
+        let mut row = d::fit_right(
+            &(i + 1).to_string(),
+            2,
+            // The number is only a key while the panel holds focus, so it is
+            // only lit then. A cyan digit you cannot press is a lie about the
+            // keyboard.
+            Style::default().fg(if focused && reachable {
+                theme.key_hint
+            } else {
+                theme.text_muted
+            }),
+        );
+        row.push(Span::raw("  "));
+        let name_w = (inner.width as usize).saturating_sub(2 + 2 + 11);
+        row.extend(d::fit_left(
+            &h.name,
+            name_w,
+            Style::default().fg(if reachable {
+                theme.text_primary
+            } else {
+                theme.text_muted
+            }),
+        ));
+        row.extend(d::fit_right(
+            if reachable {
+                "no session"
+            } else {
+                h.state.word()
+            },
+            11,
+            Style::default().fg(if reachable {
+                theme.text_muted
+            } else {
+                h.state.color(theme)
+            }),
+        ));
+        lines.push(Line::from(row));
+    }
+    if !quick.is_empty() {
+        lines.push(Line::from(Span::styled(
+            if focused {
+                "Press the number to open a session."
+            } else {
+                "Tab here, then press the number."
+            },
+            Style::default().fg(theme.text_muted),
+        )));
+    }
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+/// Panel 3 — one command, many hosts.
+fn render_broadcast(
+    f: &mut Frame,
+    area: Rect,
+    b: &super::broadcast::Broadcast,
+    focus: super::SessionsPanel,
+    theme: &Theme,
+) {
+    let focused = focus == super::SessionsPanel::Broadcast;
+    let status = b.status();
+    let inner = d::pane(
+        f,
+        area,
+        theme,
+        &d::PanelOpts {
+            key: Some("3"),
+            title: Some("broadcast"),
+            sub: Some(&status),
+            focused,
+            foot_left: if focused {
+                &[("t", " target"), ("i", " command"), ("⏎", " send")]
+            } else {
+                &[("⇥", " focus")]
+            },
+            ..Default::default()
+        },
+    );
+    if inner.width < 16 || inner.height < 2 {
+        return;
+    }
+
+    let caret = |on: bool| {
+        if on {
+            Span::styled("▌", Style::default().fg(theme.brand))
+        } else {
+            Span::raw("")
+        }
+    };
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("to  ", Style::default().fg(theme.text_muted)),
+            Span::styled(
+                if b.target.is_empty() {
+                    "no target".to_string()
+                } else {
+                    b.target.clone()
+                },
+                Style::default().fg(if b.target.is_empty() {
+                    theme.absent
+                } else {
+                    theme.text_primary
+                }),
+            ),
+            caret(focused && b.editing && b.editing_target),
+        ]),
+        Line::from(vec![
+            Span::styled("❯ ", Style::default().fg(theme.brand)),
+            Span::styled(
+                d::ellipsise(&b.command, (inner.width as usize).saturating_sub(3)),
+                Style::default().fg(theme.text_primary),
+            ),
+            caret(focused && b.editing && !b.editing_target),
+        ]),
+    ];
+
+    let room = (inner.height as usize).saturating_sub(2);
+    for (host, reply) in b.replies.iter().take(room) {
+        let colour = match reply {
+            r if r.is_running() => theme.status_warn,
+            r if r.ok() => theme.status_good,
+            _ => theme.status_error,
+        };
+        let mut row = d::fit_left(host, 11, Style::default().fg(colour));
+        row.push(Span::raw(" "));
+        row.extend(d::fit_left(
+            &reply.summary(),
+            (inner.width as usize).saturating_sub(12),
+            Style::default().fg(theme.text_muted),
+        ));
+        lines.push(Line::from(row));
+    }
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+/// Panel 4 — what changed, newest first.
+fn render_activity(f: &mut Frame, area: Rect, events: &[super::activity::Event], theme: &Theme) {
+    let inner = d::pane(
+        f,
+        area,
+        theme,
+        &d::PanelOpts {
+            key: Some("4"),
+            title: Some("activity"),
+            sub: Some("newest first"),
+            ..Default::default()
+        },
+    );
+    if inner.width < 16 || inner.height == 0 {
+        return;
+    }
+    if events.is_empty() {
+        f.render_widget(
+            Paragraph::new(d::none_line("nothing has changed yet", theme)),
+            inner,
+        );
+        return;
+    }
+
+    const AT: usize = 5;
+    const HOST: usize = 15;
+    let text_w = (inner.width as usize).saturating_sub(AT + HOST + 2 * SESSION_GAP);
+    let lines: Vec<Line> = events
+        .iter()
+        .take(inner.height as usize)
+        .map(|e| {
+            let mut row = d::fit_left(
+                &e.at.format("%H:%M").to_string(),
+                AT,
+                Style::default().fg(theme.text_muted),
+            );
+            row.push(Span::raw(" ".repeat(SESSION_GAP)));
+            row.extend(d::fit_left(
+                &e.host,
+                HOST,
+                Style::default().fg(e.severity.color(theme)),
+            ));
+            row.push(Span::raw(" ".repeat(SESSION_GAP)));
+            row.extend(d::fit_left(
+                &e.text,
+                text_w,
+                Style::default().fg(theme.text_secondary),
+            ));
+            Line::from(row)
+        })
+        .collect();
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
 /// The Fleet screen's reasoning block.
@@ -1614,6 +2112,7 @@ mod hosts_tests {
                 mem_pct: 0.1,
                 mem_rss_kb: 3000,
                 state: "S".into(),
+                tty: "?".into(),
             })
             .collect();
         h.vitals.processes.push(crate::monitor::ProcessInfo {
@@ -1623,6 +2122,7 @@ mod hosts_tests {
             mem_pct: 0.1,
             mem_rss_kb: 1700,
             state: "S".into(),
+            tty: "?".into(),
         });
 
         let rows = busiest(&[h]);
@@ -1653,6 +2153,7 @@ mod hosts_tests {
             mem_pct: 1.0,
             mem_rss_kb: 1000,
             state: "R".into(),
+            tty: "?".into(),
         }];
         assert!(busiest(&[gone]).is_empty());
     }
@@ -1672,11 +2173,148 @@ mod hosts_tests {
             mem_pct: 4.0,
             mem_rss_kb: 2_100_000,
             state: "R".into(),
+            tty: "?".into(),
         }];
         assert_eq!(busy.state(), HostState::Busy);
         let (verdict, why) = attention_wording(&busy);
         assert_eq!(verdict, "cpu 94%");
         assert!(why.contains("rustc"), "no cause named: {why:?}");
         assert!(why.contains("over 90%"), "no threshold named: {why:?}");
+    }
+}
+
+#[cfg(test)]
+mod sessions_tests {
+    use super::*;
+    use crate::tui::HostState;
+
+    fn row(number: usize, last: Option<&str>) -> SessionRow {
+        SessionRow {
+            number,
+            host: "staging-web-01".into(),
+            state: "detached",
+            host_state: HostState::Up,
+            running: Some("cargo build".into()),
+            up: "11m".into(),
+            cpu_pct: Some(89.3),
+            last_line: last.map(|s| s.to_string()),
+            idle: "1s".into(),
+            dropped: false,
+        }
+    }
+
+    /// The header has to sit over its columns. The `#` column is followed by
+    /// a gap, the dot the selection marker replaces, and another gap; missing
+    /// the second put every header two cells left of the values under it.
+    #[test]
+    fn the_header_lines_up_with_its_rows() {
+        let t = crate::theme::dark();
+        for width in [60usize, 100, 146] {
+            let cols = SessionCols::fit(width);
+            let header: String = cols.header(&t).iter().map(|s| s.content.as_ref()).collect();
+            let body: String = cols
+                .row(&row(1, Some("Compiling ratatui")), false, &t)
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect();
+            // Display cells, not byte offsets: the state glyph is three
+            // bytes and one cell, so `find` disagrees with the screen by two
+            // for every row that has one.
+            let cells_before = |s: &str, needle: &str| {
+                d::width_of(&s[..s.find(needle).expect("column not found")])
+            };
+            let host_at = cells_before(&header, "HOST");
+            let name_at = cells_before(&body, "staging-web-01");
+            assert_eq!(
+                host_at, name_at,
+                "at width {width} the HOST header is at cell {host_at} and its value at {name_at}"
+            );
+        }
+    }
+
+    /// Every row exactly as wide as the panel, at every width the smoke tests
+    /// sweep, selected or not.
+    #[test]
+    fn every_session_row_fills_its_width_exactly() {
+        let t = crate::theme::dark();
+        let rows = [
+            row(1, Some("Compiling ratatui v0.29.0")),
+            row(2, None),
+            SessionRow {
+                dropped: true,
+                cpu_pct: None,
+                running: None,
+                ..row(3, Some("stale"))
+            },
+        ];
+        for width in [50usize, 60, 80, 146, 200] {
+            let cols = SessionCols::fit(width);
+            let header: String = cols.header(&t).iter().map(|s| s.content.as_ref()).collect();
+            assert!(
+                d::width_of(&header) <= width,
+                "header is {} cells at {width}",
+                d::width_of(&header)
+            );
+            for r in &rows {
+                for selected in [false, true] {
+                    let line: String = cols
+                        .row(r, selected, &t)
+                        .iter()
+                        .map(|s| s.content.as_ref())
+                        .collect();
+                    assert!(
+                        d::width_of(&line) <= width,
+                        "row {} is {} cells at {width}: {line:?}",
+                        r.number,
+                        d::width_of(&line)
+                    );
+                }
+            }
+        }
+    }
+
+    /// LAST LINE is what the screen is for, so it is the column that keeps
+    /// its width while the others give way.
+    #[test]
+    fn last_line_keeps_the_room_as_the_panel_narrows() {
+        let wide = SessionCols::fit(146);
+        let narrow = SessionCols::fit(70);
+        assert!(wide.last > 40, "LAST LINE is {} at 146 cells", wide.last);
+        assert!(
+            narrow.last >= 12,
+            "LAST LINE collapsed to {} at 70 cells",
+            narrow.last
+        );
+        assert!(
+            narrow.up == 0 || narrow.cpu == 0,
+            "a narrow panel kept every column and squeezed LAST LINE instead"
+        );
+    }
+
+    /// A dropped session has no live process tree. SPEC §2.2 shows `—` for
+    /// its CPU and puts the recovery key in the line column, because a stale
+    /// percentage in a live column is the defect the state model exists for.
+    #[test]
+    fn a_dropped_session_shows_recovery_not_a_stale_reading() {
+        let t = crate::theme::dark();
+        let cols = SessionCols::fit(146);
+        let dropped = SessionRow {
+            dropped: true,
+            cpu_pct: None,
+            running: None,
+            state: "dropped",
+            ..row(6, Some("this was the last thing it said"))
+        };
+        let line: String = cols
+            .row(&dropped, false, &t)
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(line.contains("r reconnect"), "{line:?}");
+        assert!(line.contains("scrollback kept"), "{line:?}");
+        assert!(
+            !line.contains('%'),
+            "a dropped session reported a CPU figure"
+        );
     }
 }

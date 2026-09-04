@@ -111,6 +111,35 @@ impl VirtualTerminal {
     pub fn cursor_position(&self) -> (u16, u16) {
         self.parser.screen().cursor_position()
     }
+
+    /// The last line of the session that has anything on it. SPEC §6.2.
+    ///
+    /// This is the sessions screen's key column: it tells you what a detached
+    /// session is doing without attaching to it, and it is free — the bytes
+    /// are already in this parser. The cursor row is preferred when it has
+    /// content, because a shell sitting at a prompt has the prompt on the
+    /// cursor row and blank rows under it.
+    pub fn last_output_line(&self) -> Option<String> {
+        let screen = self.parser.screen();
+        let (rows, cols) = screen.size();
+        let (cursor_row, _) = screen.cursor_position();
+        let row_text = |row: u16| -> String {
+            (0..cols)
+                .filter_map(|col| screen.cell(row, col).map(|c| c.contents()))
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        };
+
+        let from = cursor_row.min(rows.saturating_sub(1));
+        for row in (0..=from).rev() {
+            let text = row_text(row);
+            if !text.trim().is_empty() {
+                return Some(text);
+            }
+        }
+        None
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -144,6 +173,15 @@ pub struct Session {
     pub created_at: Instant,
     pub has_new_output: bool,
     pub jump_host: Option<String>,
+    /// When this session last produced output. Drives the IDLE column.
+    pub last_output_at: Instant,
+    /// The pty this session's shell owns on the remote host, once we have
+    /// asked. `None` means we have not asked or could not tell, and the
+    /// RUNNING and CPU columns say so rather than guessing.
+    pub tty: Option<String>,
+    /// Set once a tty lookup has been attempted, so a host that cannot
+    /// answer is asked once rather than every tick.
+    pub tty_probed: bool,
 }
 
 impl Session {
@@ -167,10 +205,43 @@ impl Session {
             created_at: Instant::now(),
             has_new_output: false,
             jump_host: None,
+            last_output_at: Instant::now(),
+            tty: None,
+            tty_probed: false,
         }
     }
 
     pub fn uptime_secs(&self) -> u64 {
         self.created_at.elapsed().as_secs()
+    }
+
+    pub fn idle_secs(&self) -> u64 {
+        self.last_output_at.elapsed().as_secs()
+    }
+
+    /// The session's own state, in the words SPEC §2.2 uses.
+    ///
+    /// `attached` is the session you are looking at, which the caller knows
+    /// and this does not, so it is passed in. Everything else is the
+    /// session's own business.
+    pub fn state_word(&self, attached: bool) -> &'static str {
+        match self.state {
+            SessionState::Active if attached => "attached",
+            SessionState::Active => "detached",
+            SessionState::Suspended => "detached",
+            SessionState::Connecting => "opening",
+            SessionState::Reconnecting { .. } => "dropped",
+            SessionState::Disconnected { .. } => "dropped",
+        }
+    }
+
+    /// Whether the connection is gone. A dropped session keeps its scrollback
+    /// and has no live process tree, so its CPU is `—` rather than a stale
+    /// number.
+    pub fn is_dropped(&self) -> bool {
+        matches!(
+            self.state,
+            SessionState::Reconnecting { .. } | SessionState::Disconnected { .. }
+        )
     }
 }

@@ -110,6 +110,16 @@ impl FleetPool {
     /// usually a connection that has gone, and keeping it means every
     /// subsequent sweep fails the same way against the same dead socket.
     pub async fn exec(&self, cfg: &ConnectConfig, command: &str) -> Result<String, String> {
+        self.run(cfg, command).await.map(|out| out.stdout)
+    }
+
+    /// As `exec`, and keeps the exit status.
+    ///
+    /// The metrics sweep does not care: it parses what came back or it does
+    /// not. A broadcast does, and reporting `exit 0` for a command whose
+    /// status was thrown away is the kind of confident lie the whole state
+    /// model is built to avoid.
+    pub async fn run(&self, cfg: &ConnectConfig, command: &str) -> Result<Output, String> {
         let handle = self.handle_for(cfg).await?;
         match exec_on(&handle, command).await {
             Ok(out) => Ok(out),
@@ -121,7 +131,38 @@ impl FleetPool {
     }
 }
 
-async fn exec_on(handle: &Handle<ClientHandler>, command: &str) -> Result<String, String> {
+/// What one remote command produced.
+pub struct Output {
+    pub stdout: String,
+    /// `None` when the server closed the channel without sending one, which
+    /// happens on a signal. Absent rather than zero.
+    pub exit: Option<u32>,
+}
+
+/// Ask a connection which pty its interactive channel owns. SPEC §6.2.
+///
+/// Both channels of one SSH connection are children of the same per-connection
+/// sshd process, so the shell's pty is reachable from an exec channel without
+/// touching the shell: take this channel's parent, list that parent's other
+/// children, and take the one that has a terminal. Our own exec channels have
+/// none, which is what makes the filter exact rather than a guess.
+///
+/// This is asked once per session. Everything after it comes from the sweep
+/// the fleet sampler was already running.
+pub async fn discover_tty(handle: &Handle<ClientHandler>) -> Option<String> {
+    const CMD: &str = concat!(
+        r#"P=$(ps -o ppid= -p $$ | tr -d ' '); "#,
+        r#"ps -eo pid=,ppid=,tty= | "#,
+        r#"awk -v p="$P" '$2==p && $3!="?" {print $3; exit}'"#
+    );
+    let out = exec_on(handle, CMD).await.ok()?;
+    let tty = out.stdout.trim();
+    // `ps` reports `pts/0`; some shells and platforms answer `/dev/pts/0`.
+    let tty = tty.strip_prefix("/dev/").unwrap_or(tty);
+    (!tty.is_empty() && tty != "?").then(|| tty.to_string())
+}
+
+async fn exec_on(handle: &Handle<ClientHandler>, command: &str) -> Result<Output, String> {
     let mut channel = handle
         .channel_open_session()
         .await
@@ -132,15 +173,22 @@ async fn exec_on(handle: &Handle<ClientHandler>, command: &str) -> Result<String
         .map_err(|e| format!("exec: {e}"))?;
 
     let mut out = Vec::new();
+    let mut exit = None;
     while let Some(msg) = channel.wait().await {
         match msg {
             russh::ChannelMsg::Data { data } => out.extend_from_slice(&data),
+            // The status arrives before the close, so it is recorded and the
+            // loop keeps going. Breaking here — which it used to — threw away
+            // the one message the caller wanted and any data still in flight.
+            russh::ChannelMsg::ExitStatus { exit_status } => exit = Some(exit_status),
             russh::ChannelMsg::Eof | russh::ChannelMsg::Close => break,
-            russh::ChannelMsg::ExitStatus { .. } => break,
             _ => {}
         }
     }
-    Ok(String::from_utf8_lossy(&out).to_string())
+    Ok(Output {
+        stdout: String::from_utf8_lossy(&out).to_string(),
+        exit,
+    })
 }
 
 #[cfg(test)]

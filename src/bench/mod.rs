@@ -177,6 +177,7 @@ pub fn bench_tui_frame() -> BenchResult {
             mem_pct: 2.0,
             mem_rss_kb: 118_800,
             state: "S".into(),
+            tty: "?".into(),
         })
         .collect();
     metrics.top_procs_mem = metrics.top_procs_cpu.clone();

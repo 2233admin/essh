@@ -739,6 +739,7 @@ mod essentials_tests {
             mem_pct: 1.0,
             mem_rss_kb: 118_800,
             state: "S".into(),
+            tty: "?".into(),
         }];
         for slot in [
             &mut m.status.cpu,

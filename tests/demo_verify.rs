@@ -305,6 +305,51 @@ fn the_demo_beats_match_the_spec() {
     let s = tui.frame("3 · third session up");
     universal_rules(&s, "sessions");
 
+    // ── beat 3b · the sessions screen, which v2 opens on ─────────────────
+    tui.send(&[0x01]);
+    tui.settle(400);
+    tui.type_text("d");
+    tui.settle(1200);
+    tui.type_text("1");
+    tui.settle(4500);
+    let sessions = tui.frame("3b · sessions");
+    universal_rules(&sessions, "sessions");
+
+    // SPEC §6.2 — LAST LINE is the column the screen exists for: what a
+    // detached session is doing, without attaching to it. It comes from the
+    // scrollback essh already holds, so a blank column here means the
+    // cheapest thing on the screen is broken.
+    let with_last_line = sessions
+        .lines()
+        .filter(|l| l.contains("matt@") || l.contains("$"))
+        .count();
+    assert!(
+        with_last_line >= 2,
+        "the LAST LINE column is empty for every session:\n{sessions}"
+    );
+
+    // SPEC §2.1 — quick connect lists exactly the hosts with no session, and
+    // the count comes from the same place the SESS column and the header do.
+    // The handoff's own list omits one, which is what happens when three
+    // readings of one fact are written down separately.
+    // Asserted on the count in the panel's own subtitle rather than by
+    // looking for host names on screen lines: the three bottom panels sit
+    // side by side, so one line carries a quick-connect row, a broadcast row
+    // and an activity row, and "web-02 appears on a line that also says `no
+    // session`" is true for reasons that have nothing to do with the panel.
+    let quick_count = sessions
+        .split("quick connect")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().nth(1))
+        .and_then(|n| n.parse::<usize>().ok())
+        .unwrap_or_else(|| panic!("no quick connect panel:\n{sessions}"));
+    assert_eq!(
+        quick_count,
+        FLEET.len() - 3,
+        "quick connect offers {quick_count} of {} hosts with three sessions open:\n{sessions}",
+        FLEET.len()
+    );
+
     // ── beat 4 · the hosts screen ────────────────────────────────────────
     tui.send(&[0x01]);
     tui.settle(400);

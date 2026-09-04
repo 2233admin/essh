@@ -67,7 +67,10 @@ pub fn panel(buf: &mut Buffer, area: Rect, t: &Theme, o: &PanelOpts) -> Rect {
     if area.width < 2 || area.height < 2 {
         return area;
     }
-    let border = Style::default().fg(if o.focused { t.brand } else { t.border });
+    // SPEC §5.1: focus has its own slot. `brand` is chrome — panel numbers,
+    // keys, the caret — and using it for focus makes every panel look focused
+    // at a glance.
+    let border = Style::default().fg(if o.focused { t.border_focus } else { t.border });
     let x0 = area.x;
     let y0 = area.y;
     let x1 = area.x + area.width - 1;

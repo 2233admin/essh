@@ -86,6 +86,8 @@ struct TuiState {
     fleet_sampler: fleet::sampler::FleetSampler,
     fleet_pool: fleet::pool::FleetPool,
     fleet_sample_task: Option<FleetSampleTask>,
+    /// Per-host broadcast replies, drained each tick. SPEC §6.5.
+    broadcast_rx: Option<tokio::sync::mpsc::Receiver<(String, tui::broadcast::Reply)>>,
     /// Set once, the first time sampling is refused for a reason the user can
     /// act on. Repeating it every five seconds would be a status bar.
     fleet_sample_refusal: Option<String>,
@@ -950,6 +952,7 @@ async fn tui_main_loop(
         fleet_pool: fleet::pool::FleetPool::new(),
         fleet_sample_task: None,
         fleet_sample_refusal: None,
+        broadcast_rx: None,
         pending_connect: None,
     };
 
@@ -992,6 +995,11 @@ async fn tui_main_loop(
                         Ok(data) => {
                             if let Some(session) = app.session_manager.sessions.get_mut(i) {
                                 session.terminal.process(&data);
+                                // The IDLE column measures time since the
+                                // remote said something, not time since you
+                                // looked at it, so this is recorded whether or
+                                // not the session is on screen.
+                                session.last_output_at = std::time::Instant::now();
                                 if app.session_manager.active_index != Some(i) {
                                     session.has_new_output = true;
                                     if !tui_state.notification_matcher.is_empty() {
@@ -1059,6 +1067,15 @@ async fn tui_main_loop(
                 )
                 .await?;
                 if handled == KeyAction::Quit {
+                    if let Some(rx) = tui_state.broadcast_rx.as_mut() {
+                        while let Ok((host, reply)) = rx.try_recv() {
+                            app.broadcast.record(&host, reply);
+                        }
+                        if !app.broadcast.in_flight() {
+                            tui_state.broadcast_rx = None;
+                        }
+                    }
+
                     if let Some(task) = tui_state.fleet_sample_task.take() {
                         task.abort();
                     }
@@ -1130,6 +1147,15 @@ async fn tui_main_loop(
                         } else {
                             app.set_status(format!("restoring {} — {} of {}", name, done, total));
                         }
+                    }
+                }
+
+                if let Some(rx) = tui_state.broadcast_rx.as_mut() {
+                    while let Ok((host, reply)) = rx.try_recv() {
+                        app.broadcast.record(&host, reply);
+                    }
+                    if !app.broadcast.in_flight() {
+                        tui_state.broadcast_rx = None;
                     }
                 }
 
@@ -1401,6 +1427,30 @@ async fn tui_main_loop(
                         Err(_) => {
                             // Will retry on next tick cycle
                         }
+                    }
+                }
+
+                // Which pty is which session's. SPEC §6.2.
+                //
+                // Asked once per session, over the session's own connection,
+                // and never again: a pty does not move. Everything the
+                // sessions screen shows after this comes from the fleet
+                // sweep, so the RUNNING and CPU columns add no polling at
+                // all.
+                for (i, rt) in runtimes.iter().enumerate() {
+                    let Some(rt) = rt else { continue };
+                    let asked = app
+                        .session_manager
+                        .sessions
+                        .get(i)
+                        .is_none_or(|s| s.tty_probed);
+                    if asked {
+                        continue;
+                    }
+                    let found = fleet::pool::discover_tty(&rt.ssh_session.handle).await;
+                    if let Some(session) = app.session_manager.sessions.get_mut(i) {
+                        session.tty = found;
+                        session.tty_probed = true;
                     }
                 }
 
@@ -2779,6 +2829,46 @@ async fn handle_dashboard_key(
             _ => {}
         }
         return Ok(KeyAction::Handled);
+    }
+
+    // SPEC §4.1 — the sessions screen's panels take keys in turn.
+    //
+    // This runs before the shared dashboard bindings, and only on the
+    // sessions tab, so a digit means "open host N" while quick connect holds
+    // focus and "switch tab" everywhere else. That is the whole resolution of
+    // the handoff's three-way collision on the digits, and it is one branch
+    // rather than a mode.
+    if app.dashboard_tab == DashboardTab::Sessions {
+        match key.code {
+            KeyCode::Tab => {
+                app.sessions_panel = app.sessions_panel.next();
+                return Ok(KeyAction::Handled);
+            }
+            KeyCode::BackTab => {
+                app.sessions_panel = app.sessions_panel.prev();
+                return Ok(KeyAction::Handled);
+            }
+            _ => {}
+        }
+        if app.sessions_panel == tui::SessionsPanel::QuickConnect {
+            if let KeyCode::Char(c @ '1'..='9') = key.code {
+                let nth = c as usize - '1' as usize;
+                let Some(name) = app.quick_connect_hosts().get(nth).map(|h| h.name.clone()) else {
+                    app.set_status(format!("no host {c} in quick connect"));
+                    return Ok(KeyAction::Handled);
+                };
+                let Some(host) = app.hosts.iter().find(|h| h.name == name).cloned() else {
+                    return Ok(KeyAction::Handled);
+                };
+                open_session(app, config, audit, &host, runtimes, output_rxs).await?;
+                return Ok(KeyAction::Handled);
+            }
+        }
+        if app.sessions_panel == tui::SessionsPanel::Broadcast {
+            if let Some(action) = handle_broadcast_key(key, app, config, tui_state) {
+                return Ok(action);
+            }
+        }
     }
 
     match key.code {
@@ -4804,6 +4894,7 @@ fn apply_sample(
             host.vitals.load1 = sample.load1;
             host.vitals.cores = sample.cores;
             host.vitals.processes = sample.processes.clone();
+            host.vitals.by_tty = sample.by_tty.clone();
             host.vitals.sampled_at = Some(now);
             host.vitals.unreadable = None;
         }
@@ -5064,6 +5155,143 @@ async fn health_check(config: &AppConfig, group: Option<&str>) -> anyhow::Result
         }
     }
     Ok(())
+}
+
+/// The broadcast panel's keys. SPEC §6.5.
+///
+/// `None` means the key was not ours and the shared dashboard bindings should
+/// see it. Returning `Handled` for everything while editing is what stops `q`
+/// quitting essh in the middle of typing a command.
+fn handle_broadcast_key(
+    key: crossterm::event::KeyEvent,
+    app: &mut App,
+    config: &AppConfig,
+    tui_state: &mut TuiState,
+) -> Option<KeyAction> {
+    let b = &mut app.broadcast;
+    if b.editing {
+        match key.code {
+            KeyCode::Esc => b.editing = false,
+            KeyCode::Tab => b.editing_target = !b.editing_target,
+            KeyCode::Backspace => {
+                if b.editing_target {
+                    b.target.pop();
+                } else {
+                    b.command.pop();
+                }
+            }
+            KeyCode::Char(c) => {
+                if b.editing_target {
+                    b.target.push(c);
+                } else {
+                    b.command.push(c);
+                }
+            }
+            KeyCode::Enter => {
+                let (target, command) = (b.target.clone(), b.command.clone());
+                start_broadcast(app, config, tui_state, &target, &command);
+            }
+            _ => return None,
+        }
+        return Some(KeyAction::Handled);
+    }
+
+    match key.code {
+        KeyCode::Char('t') => {
+            b.editing = true;
+            b.editing_target = true;
+        }
+        KeyCode::Char('i') => {
+            b.editing = true;
+            b.editing_target = false;
+        }
+        KeyCode::Enter => {
+            let (target, command) = (b.target.clone(), b.command.clone());
+            start_broadcast(app, config, tui_state, &target, &command);
+        }
+        _ => return None,
+    }
+    Some(KeyAction::Handled)
+}
+
+/// Fan a command out to a tag's hosts, without blocking the frame.
+///
+/// One task per host rather than one task for the lot, so a host that is
+/// slow to answer delays only its own row. The event loop drains the channel
+/// each tick, which is what keeps the panel filling in while the run is still
+/// going: a broadcast that reports only when the last host finishes looks,
+/// for its whole duration, exactly like a broadcast that has hung.
+fn start_broadcast(
+    app: &mut App,
+    config: &AppConfig,
+    tui_state: &mut TuiState,
+    target: &str,
+    command: &str,
+) {
+    if command.trim().is_empty() {
+        app.set_status("Nothing to broadcast: type a command with `i`.".into());
+        return;
+    }
+    if app.broadcast.in_flight() {
+        app.set_status("A broadcast is already running.".into());
+        return;
+    }
+
+    let (key, value) = match target.split_once('=') {
+        Some((k, v)) => (Some(k.to_string()), v.to_string()),
+        None => (None, target.to_string()),
+    };
+    let hosts: Vec<HostDisplay> = app
+        .hosts
+        .iter()
+        .filter(|h| {
+            h.tag_pairs
+                .iter()
+                .any(|(k, v)| v == &value && key.as_deref().is_none_or(|want| want == k))
+        })
+        .cloned()
+        .collect();
+
+    if hosts.is_empty() {
+        app.set_status(format!("No host carries the tag `{target}`."));
+        return;
+    }
+
+    let names: Vec<String> = hosts.iter().map(|h| h.name.clone()).collect();
+    app.broadcast.start(&names);
+
+    let (tx, rx) = tokio::sync::mpsc::channel(64);
+    tui_state.broadcast_rx = Some(rx);
+    for host in hosts {
+        let Ok(cfg) = sampler_connect_config(config, &host) else {
+            let tx = tx.clone();
+            let name = host.name.clone();
+            tokio::spawn(async move {
+                tx.send((name, tui::broadcast::Reply::Failed("no usable key".into())))
+                    .await
+                    .ok();
+            });
+            continue;
+        };
+        let tx = tx.clone();
+        let name = host.name.clone();
+        let cmd = command.to_string();
+        let pool = tui_state.fleet_pool.share();
+        tokio::spawn(async move {
+            let started = std::time::Instant::now();
+            // Over the pool, so a host with a session open costs no second
+            // connection and no second entry in its auth log.
+            let reply = match pool.run(&cfg, &cmd).await {
+                Ok(out) => tui::broadcast::Reply::Done {
+                    exit: out.exit,
+                    took: started.elapsed(),
+                    first_line: out.stdout.lines().next().map(|l| l.trim().to_string()),
+                },
+                Err(why) => tui::broadcast::Reply::Failed(why),
+            };
+            tx.send((name, reply)).await.ok();
+        });
+    }
 }
 
 /// `essh diff <tag>` — SPEC §8.

@@ -78,6 +78,32 @@ pub struct Sample {
     pub cores: Option<usize>,
     /// Top processes by CPU, for the health screen's fleet-wide list.
     pub processes: Vec<ProcessInfo>,
+    /// One entry per controlling terminal on the host.
+    ///
+    /// This is what the sessions screen's RUNNING and CPU columns read. A
+    /// session's shell owns a pty and everything it runs inherits it, so once
+    /// essh knows which pty is which session's — asked once, at connect — the
+    /// columns cost nothing beyond the sweep that was already happening.
+    ///
+    /// Rolled up here rather than in the view because the full process list
+    /// is thrown away after the top-N is taken, and re-fetching it per
+    /// session per poll is the design this exists to avoid.
+    pub by_tty: HashMap<String, TtySummary>,
+}
+
+/// What one pty's processes add up to.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TtySummary {
+    /// Summed CPU across the pty's processes. The session's process tree, in
+    /// the only sense the host can report cheaply.
+    pub cpu_pct: f64,
+    /// The foreground command: the leaf of the foreground process group.
+    ///
+    /// `ps` marks that group with `+` in STAT. The leaf rather than any
+    /// member, because when a shell is waiting on `cargo build` both are
+    /// foreground and only one of them is the answer to "what is it running".
+    pub foreground: Option<String>,
+    pub process_count: usize,
 }
 
 /// How a sweep ended. Three outcomes, and the middle one is the one the v2
@@ -327,15 +353,54 @@ impl FleetSampler {
             }
         };
 
+        // Parsed twice against one payload: the top-N the health screen
+        // shows, and the per-pty rollup the sessions screen reads. The second
+        // needs every process, not the busiest few, so it cannot be taken
+        // from the first.
+        let raw_ps = get("PS");
         Sample {
             cpu_pct: None,
             mem_pct,
             disk_pct,
             load1,
             cores: None,
-            processes: parser::parse_ps(&get("PS"), process_limit),
+            processes: parser::parse_ps(&raw_ps, process_limit),
+            by_tty: roll_up_by_tty(&parser::parse_ps(&raw_ps, usize::MAX)),
         }
     }
+}
+
+/// Group a host's processes by controlling terminal.
+///
+/// The foreground pick is the part worth reading twice. `ps` marks every
+/// member of a terminal's foreground process group with `+`, so a shell
+/// waiting on `cargo build` marks both. Taking the first would report
+/// `-bash` for a host that is compiling. Taking the leaf — the `+` process
+/// that is nobody else's ancestor — reports `cargo build`, which is what the
+/// column is for.
+///
+/// `ps aux` gives no ppid, so "leaf" is approximated by the highest PID among
+/// the foreground set. A child is started after its parent and so has the
+/// later pid, except across a pid wrap, which needs a 32-bit counter to have
+/// gone round between a shell starting and its own child starting.
+pub fn roll_up_by_tty(procs: &[ProcessInfo]) -> HashMap<String, TtySummary> {
+    let mut out: HashMap<String, TtySummary> = HashMap::new();
+    for p in procs {
+        if p.tty == "?" || p.tty.is_empty() {
+            continue;
+        }
+        let entry = out.entry(p.tty.clone()).or_default();
+        entry.cpu_pct += p.cpu_pct;
+        entry.process_count += 1;
+    }
+    for (tty, summary) in out.iter_mut() {
+        summary.foreground = procs
+            .iter()
+            .filter(|p| &p.tty == tty && p.is_foreground())
+            .max_by_key(|p| p.pid)
+            .map(|p| p.name.clone());
+    }
+    out
 }
 
 #[cfg(test)]
@@ -371,6 +436,9 @@ Inter-|   Receive
 ===PS===
 USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND
 matt 1 3.1 0.1 1000 1700 ? Ss 09:00 0:01 nginx: master
+matt 40 0.5 0.1 1000 3600 pts/0 Ss 09:00 0:01 -bash
+matt 41 61.0 4.0 9000 840000 pts/0 S+ 09:01 0:30 pg_dump events
+matt 42 0.9 0.1 1000 3600 pts/1 Ss+ 09:00 0:01 -bash
 ===END===
 ";
 
@@ -544,6 +612,53 @@ matt 1 3.1 0.1 1000 1700 ? Ss 09:00 0:01 nginx: master
         assert!(s.due(&["gone-01".into()], now).is_empty());
         s.retry_now("gone-01", now);
         assert_eq!(s.due(&["gone-01".into()], now).len(), 1);
+    }
+
+    /// SPEC §6.2. A pty's processes are one session's process tree, and the
+    /// foreground pick is what makes the column say `pg_dump` rather than
+    /// `-bash` for a shell that is waiting on one.
+    #[test]
+    fn processes_roll_up_per_terminal() {
+        let mut s = sampler();
+        let now = Instant::now();
+        s.record("db-01", Ok(LINUX_SWEEP.into()), now);
+        let Outcome::Read(sample) = s.record("db-01", Ok(second_sweep()), now) else {
+            panic!("expected a reading");
+        };
+
+        // The process with no terminal belongs to no session and is absent.
+        assert!(!sample.by_tty.contains_key("?"));
+        assert_eq!(sample.by_tty.len(), 2);
+
+        let busy = sample.by_tty.get("pts/0").expect("pts/0");
+        assert!((busy.cpu_pct - 61.5).abs() < 0.01, "{:?}", busy.cpu_pct);
+        assert_eq!(busy.process_count, 2);
+        assert_eq!(
+            busy.foreground.as_deref(),
+            Some("pg_dump events"),
+            "a shell waiting on a command is not what the session is running"
+        );
+
+        let idle = sample.by_tty.get("pts/1").expect("pts/1");
+        assert_eq!(idle.foreground.as_deref(), Some("-bash"));
+        assert_eq!(idle.process_count, 1);
+    }
+
+    /// A pty with nothing in the foreground has no answer, and says so rather
+    /// than naming whichever process happened to be first.
+    #[test]
+    fn a_terminal_with_no_foreground_group_reports_none() {
+        let procs = vec![crate::monitor::ProcessInfo {
+            pid: 1,
+            name: "-bash".into(),
+            cpu_pct: 0.0,
+            mem_pct: 0.0,
+            mem_rss_kb: 0,
+            state: "Ss".into(),
+            tty: "pts/9".into(),
+        }];
+        let rolled = roll_up_by_tty(&procs);
+        assert_eq!(rolled["pts/9"].foreground, None);
     }
 
     /// Hosts must not arrive at their sshd in one burst.

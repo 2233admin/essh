@@ -110,6 +110,21 @@ pub fn count(n: usize, singular: &str) -> String {
     }
 }
 
+/// A duration in one unit, for a narrow column. SPEC §2.2's UP and IDLE.
+///
+/// One unit, not two: `2h 30m` is six characters in a column budgeted eight
+/// and stops being readable the moment a session has been up for a fortnight.
+/// The precision lost is precision nobody reads off a session list.
+pub fn short_duration(secs: u64) -> String {
+    match secs {
+        0..=2 => "now".to_string(),
+        s if s < 60 => format!("{s}s"),
+        s if s < 3600 => format!("{}m", s / 60),
+        s if s < 86_400 => format!("{}h", s / 3600),
+        s => format!("{}d", s / 86_400),
+    }
+}
+
 /// Sort tags so the display order is stable across renders.
 pub fn sorted_tags(tags: &std::collections::HashMap<String, String>) -> Vec<(String, String)> {
     let mut v: Vec<(String, String)> = tags.iter().map(|(k, s)| (k.clone(), s.clone())).collect();

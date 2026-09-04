@@ -312,6 +312,24 @@ pub struct ProcessInfo {
     pub mem_pct: f64,
     pub mem_rss_kb: u64,
     pub state: String,
+    /// Controlling terminal, `pts/0` or `?` for none.
+    ///
+    /// This is what attributes a process to a session. A session's shell owns
+    /// a pty, everything it runs inherits it, and `ps` reports it in a column
+    /// the sweep already collects — so the sessions screen's RUNNING and CPU
+    /// columns cost nothing beyond knowing which pty is which session's,
+    /// which is asked once at connect.
+    pub tty: String,
+}
+
+impl ProcessInfo {
+    /// Whether this process is in its terminal's foreground process group.
+    ///
+    /// `ps`'s STAT column marks it with `+`. It is what separates "the shell
+    /// is sitting at a prompt" from "the shell is waiting on cargo".
+    pub fn is_foreground(&self) -> bool {
+        self.state.contains('+')
+    }
 }
 
 #[cfg(test)]

@@ -201,6 +201,7 @@ pub fn parse_ps(raw: &str, limit: usize) -> Vec<ProcessInfo> {
         let cpu_pct: f64 = parts[2].parse().unwrap_or(0.0);
         let mem_pct: f64 = parts[3].parse().unwrap_or(0.0);
         let rss: u64 = parts[5].parse().unwrap_or(0); // RSS in KB
+        let tty = parts[6].to_string();
         let state = parts[7].to_string();
         let name = parts[10..].join(" ");
         // Skip kernel threads (names in brackets)
@@ -221,6 +222,7 @@ pub fn parse_ps(raw: &str, limit: usize) -> Vec<ProcessInfo> {
             mem_pct,
             mem_rss_kb: rss,
             state,
+            tty,
         });
         if procs.len() >= limit {
             break;

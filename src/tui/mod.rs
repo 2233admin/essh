@@ -1,3 +1,5 @@
+pub mod activity;
+pub mod broadcast;
 pub mod chrome;
 pub mod command_palette;
 pub mod dashboard;
@@ -134,6 +136,9 @@ pub struct HostVitals {
     /// list, and what lets an attention row name the cause of the load
     /// instead of just reporting it.
     pub processes: Vec<crate::monitor::ProcessInfo>,
+    /// Per-pty rollup. The sessions screen's RUNNING and CPU columns read
+    /// this, keyed by the tty each session reported at connect.
+    pub by_tty: std::collections::HashMap<String, crate::fleet::sampler::TtySummary>,
     /// Set when the host answers TCP but the sampler could not read metrics
     /// off it. Reachable with no numbers is a fourth thing the table has to
     /// say, and it is not the same as offline.
@@ -329,6 +334,42 @@ impl HostState {
     ];
 }
 
+/// Which panel of the sessions screen has focus. SPEC §4.1.
+///
+/// The handoff wants `1` to do three things on this screen: switch to the
+/// sessions tab, jump to session 1, and open a session on the first host with
+/// none. Two of those have to give way.
+///
+/// Tabs keep the digits, because the header numbers them, the help screen
+/// teaches them, and they work from every tab. The `#` column is the number
+/// `Ctrl+A` jumps to inside a session, which it already was. Quick connect
+/// keeps its numbers but only while it holds focus, which costs one `Tab` and
+/// is the least valuable of the three affordances.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionsPanel {
+    Table,
+    QuickConnect,
+    Broadcast,
+}
+
+impl SessionsPanel {
+    pub const ORDER: [SessionsPanel; 3] = [
+        SessionsPanel::Table,
+        SessionsPanel::QuickConnect,
+        SessionsPanel::Broadcast,
+    ];
+
+    pub fn next(self) -> Self {
+        let i = Self::ORDER.iter().position(|p| *p == self).unwrap_or(0);
+        Self::ORDER[(i + 1) % Self::ORDER.len()]
+    }
+
+    pub fn prev(self) -> Self {
+        let i = Self::ORDER.iter().position(|p| *p == self).unwrap_or(0);
+        Self::ORDER[(i + Self::ORDER.len() - 1) % Self::ORDER.len()]
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum DashboardTab {
     Sessions,
@@ -365,6 +406,12 @@ pub struct App {
     /// connected to a host rather than attaching to the session under the
     /// (invisible) cursor.
     pub selected_session: usize,
+    /// Which panel of the sessions screen takes keys. SPEC §4.1.
+    pub sessions_panel: SessionsPanel,
+    /// What changed, and when. SPEC §6.6.
+    pub activity: activity::ActivityLog,
+    /// The broadcast panel's target, command and per-host results.
+    pub broadcast: broadcast::Broadcast,
     pub status_message: Option<String>,
     pub status_set_at: Option<std::time::Instant>,
     pub monitor_sort: host_monitor::ProcessSort,
@@ -463,6 +510,9 @@ impl App {
             view: AppView::Dashboard,
             dashboard_tab: DashboardTab::Hosts,
             selected_session: 0,
+            sessions_panel: SessionsPanel::Table,
+            activity: activity::ActivityLog::default(),
+            broadcast: broadcast::Broadcast::default(),
             status_message: None,
             status_set_at: None,
             monitor_sort: host_monitor::ProcessSort::Cpu,
@@ -516,6 +566,80 @@ impl App {
     /// needs one number in the list, and the broader group is the one whose
     /// consensus means the most.
     ///
+    /// The sessions table, flattened. SPEC §2.2.
+    pub fn session_rows(&self) -> Vec<dashboard::SessionRow> {
+        self.session_manager
+            .sessions
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let (running, cpu_pct) = self.session_detail(i);
+                let host_state = self
+                    .hosts
+                    .iter()
+                    .find(|h| h.hostname == s.hostname && h.port == s.port)
+                    .map(|h| h.state())
+                    .unwrap_or(HostState::Unprobed);
+                dashboard::SessionRow {
+                    number: i + 1,
+                    host: s.label.clone(),
+                    state: s.state_word(self.session_manager.active_index == Some(i)),
+                    host_state,
+                    running,
+                    up: crate::format::short_duration(s.uptime_secs()),
+                    cpu_pct,
+                    last_line: s.terminal.last_output_line(),
+                    idle: crate::format::short_duration(s.idle_secs()),
+                    dropped: s.is_dropped(),
+                }
+            })
+            .collect()
+    }
+
+    /// The hosts with no session. SPEC §2.1.
+    ///
+    /// Derived from the same count the SESS column and the header read, so
+    /// the three cannot disagree — which is the defect in the handoff's own
+    /// quick-connect list, where a host with no session is simply missing.
+    pub fn quick_connect_hosts(&self) -> Vec<dashboard::QuickHost> {
+        self.hosts
+            .iter()
+            .filter(|h| h.session_count == 0)
+            .map(|h| dashboard::QuickHost {
+                name: h.name.clone(),
+                state: h.state(),
+            })
+            .collect()
+    }
+
+    /// What one session is running, and what it costs. SPEC §6.2.
+    ///
+    /// Both come from the host sweep, keyed by the pty the session reported
+    /// at connect. A dropped session has no live process tree, so it gets
+    /// neither rather than the last reading dressed as a current one.
+    pub fn session_detail(&self, idx: usize) -> (Option<String>, Option<f64>) {
+        let Some(session) = self.session_manager.sessions.get(idx) else {
+            return (None, None);
+        };
+        if session.is_dropped() {
+            return (None, None);
+        }
+        let Some(tty) = session.tty.as_deref() else {
+            return (None, None);
+        };
+        let Some(host) = self
+            .hosts
+            .iter()
+            .find(|h| h.hostname == session.hostname && h.port == session.port)
+        else {
+            return (None, None);
+        };
+        match host.vitals.by_tty.get(tty) {
+            Some(t) => (t.foreground.clone(), Some(t.cpu_pct)),
+            None => (None, None),
+        }
+    }
+
     /// Sessions per host, recomputed from the session manager.
     ///
     /// Derived rather than tracked. A count kept in two places is a count
@@ -523,7 +647,16 @@ impl App {
     /// SESS column and quick-connect panel are three readings of this one
     /// fact — the handoff's own quick-connect list omits a host that has no
     /// session, which is what that disagreement looks like.
-    pub fn recount_sessions_per_host(&mut self) {
+    pub fn refresh_derived(&mut self) {
+        self.recount_sessions_per_host();
+        self.activity.observe_hosts(&self.hosts);
+        self.activity.observe_sessions(
+            &self.session_manager.sessions,
+            self.session_manager.active_index,
+        );
+    }
+
+    fn recount_sessions_per_host(&mut self) {
         for host in self.hosts.iter_mut() {
             host.session_count = self
                 .session_manager
@@ -833,7 +966,7 @@ impl App {
 }
 
 pub fn render(frame: &mut Frame, app: &mut App) {
-    app.recount_sessions_per_host();
+    app.refresh_derived();
     match app.view {
         AppView::Launcher => {
             launcher_view::render(
@@ -845,10 +978,18 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         }
         AppView::Dashboard => {
             let filtered_indices = app.filtered_host_indices();
+            let session_rows = app.session_rows();
+            let quick = app.quick_connect_hosts();
+            let activity: Vec<_> = app.activity.recent(12).cloned().collect();
             dashboard::render(
                 frame,
                 frame.area(),
                 &app.session_manager.sessions,
+                &session_rows,
+                &quick,
+                &activity,
+                &app.broadcast,
+                app.sessions_panel,
                 &app.hosts,
                 &filtered_indices,
                 app.selected_host,
