@@ -108,7 +108,7 @@ stage() {
       # has to outlive the exec that starts it, which a backgrounded child of
       # `podman exec -d` does not.
       podman exec "$name" sh -c \
-        'cat > /usr/local/bin/essh-fixture-load <<"EOF"
+        'cat > /usr/local/bin/essh-fixture-load <<"LOADEOF"
 #!/bin/sh
 # Deliberate load, so the health screen has something real to be about.
 #
@@ -124,11 +124,11 @@ while :; do
   i=$((i + 1))
   if [ $((i % 200000)) -eq 0 ] && [ "$(date +%s)" -ge "$end" ]; then exit 0; fi
 done
-EOF
+LOADEOF
          chmod +x /usr/local/bin/essh-fixture-load'
       for _ in 1 2 3; do
         podman exec -d "$name" nice -n 19 \
-          /usr/local/bin/essh-fixture-load "${LOAD_SECS:-1800}"
+          /usr/local/bin/essh-fixture-load "${LOAD_SECS:-7200}"
       done ;;
     db|monitor|jump)
       : ;;
@@ -191,6 +191,15 @@ cmd_up() {
     IFS=: read -r name ip role <<<"$spec"
     if [ "$role" = offline ]; then continue; fi
     stage "$name" "$role" >/dev/null 2>&1 || true
+  done
+
+  # `podman exec -d` returns before the process it started is in `ps`, and
+  # nginx and redis take a moment to bind. Checking immediately reports drift
+  # that is only a race, which is worse than no check: it teaches you to
+  # ignore the one thing that tells you the fixture is wrong.
+  for _ in $(seq 20); do
+    if cmd_check >/dev/null 2>&1; then break; fi
+    sleep 0.25
   done
   cmd_check
 }
