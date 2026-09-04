@@ -70,8 +70,13 @@ pub const PANEL_ALT: Color = Color::Rgb(0x10, 0x1a, 0x1f);
 /// in the UI rather than as another panel.
 pub const TERMINAL_BG: Color = Color::Rgb(0x08, 0x0f, 0x13);
 
-/// The empty cells of a meter. Visible as a track, invisible as a value.
-pub const METER_TRACK: Color = Color::Rgb(0x16, 0x23, 0x2a);
+/// The empty cells of a meter.
+///
+/// Has to read as a track. At `#16232a` on this panel ground it did not, so a
+/// disk at 2% drew nothing at all and the column looked broken rather than
+/// empty. A track you cannot see is the same defect as a meter you cannot
+/// see, one value along.
+pub const METER_TRACK: Color = Color::Rgb(0x24, 0x33, 0x3c);
 
 /// The border of the focused pane. SPEC §4.1 hangs the quick-connect digits
 /// on panel focus, so focus has to be visible and cannot be drawn from

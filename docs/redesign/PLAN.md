@@ -1,7 +1,20 @@
 # ESSH TUI redesign v2, implementation plan
 
-Companion to `SPEC.md`. Phase 0 is committed at `5d141f0`. Phases 1 to 7 are
-sized against the code as it stands on `redesign/v2`.
+Companion to `SPEC.md`. Phases 0 to 3 are committed on `redesign/v2`; phases 4
+to 9 are sized against the code as it stands after them.
+
+| Phase | State |
+| --- | --- |
+| 0 · the seven v0.3.3 defects | done, `5d141f0` |
+| 1 · design system | done, `a5005aa` |
+| 2 · fleet metrics | done, `a3a0ae0` |
+| 3 · hosts and health | done, `a3a0ae0` and `261ef86` |
+| 4 · sessions | next |
+| 5 · terminal, files, forwards | |
+| 6 · help and config | |
+| 7 · themes | |
+| 8 · divergence moves out | done in part: `essh diff` ships, `D` stays (SPEC §8) |
+| 9 · remote port forwards | |
 
 Ordering rule: nothing that renders a number ships before the data behind it
 exists. The v1 plan opened with that warning about three screens. v2 makes it
@@ -30,7 +43,7 @@ Phase 0 predates the v2 handoff and targets v1's screens. Fixes 2, 4, 5, 6 and
 survives behind `essh why` and `essh diff` (SPEC §8), and the `p` / `P` / `R`
 split retires with the dashboard tab that used it.
 
-## Phase 1, the design system (2 to 3 days)
+## Phase 1, the design system (done)
 
 Nothing renders differently at the end of this phase. It is the foundation the
 other screens assume, and it is the phase where a redesign quietly regresses,
@@ -55,7 +68,7 @@ so it gates on a slot table rendered in all nine themes.
 **Done when** a table of every slot renders in all nine themes, the terminal
 theme emits no RGB, and `the_header_counts_partition_the_fleet` passes.
 
-## Phase 2, fleet metrics (5 to 8 days, the long pole)
+## Phase 2, fleet metrics (done)
 
 Collection first. Every panel in phases 3 and 4 reads this.
 
@@ -77,7 +90,13 @@ no session open, a stopped container degrades to `offline` inside two cycles
 without a zero appearing anywhere, and the sampler's cost is measured and
 recorded.
 
-## Phase 3, hosts and health (4 to 5 days)
+Done. The measurement and the choice it drove are in `fleet::sampler`'s module
+doc. `fleet::live` runs the sampler against the containers, because the unit
+tests parse canned output and cannot tell you whether the command essh sends
+produces output essh can read — which is exactly the failure that happened,
+with eight open connections and a table of dashes.
+
+## Phase 3, hosts and health (done)
 
 The two screens the redesign is for. `DashboardTab::Fleet` becomes `Health`.
 
@@ -95,6 +114,12 @@ The two screens the redesign is for. `DashboardTab::Fleet` becomes `Health`.
 
 **Done when** a fixture-driven render test asserts SPEC §2's relations on both
 screens and no count on either disagrees with the header.
+
+Done, in `tests/demo_verify.rs` against the live fixture. What it cannot
+assert is in SPEC §9.1: the containers share the host's `/proc`, so per-host
+CPU cannot differ. Fixing that means lxcfs in the fixture image or a sampler
+that reads cgroup counters — needed before a screenshot of this fixture says
+anything about a real fleet, not needed to verify the screens.
 
 ## Phase 4, sessions (3 to 4 days)
 
@@ -136,12 +161,20 @@ Nine palettes times five new slots, plus SPEC §5.3 for `terminal` and darkened
 severity hues for `light`. A screenshot per theme per screen, reviewed side by
 side. Needs phase 1's slots and is best done once the screens are stable.
 
-## Phase 8, divergence moves out (2 days, independent)
+## Phase 8, divergence moves out (mostly done)
 
-`essh diff <tag>` prints the facet table the dashboard used to show. `essh why`
-already ships. Remove the `Fleet` tab, the `DIVERGE` column, the `D` modal and
-the `p` / `P` / `R` split. Keep `divergence::` and its tests intact: the engine
-is correct and the redesign is about where it appears, not whether it works.
+`essh diff <tag>` ships and prints what the dashboard used to show. `essh why`
+already did. The `Fleet` tab, the `DIVERGE` column, the groups panel and the
+`p` / `P` / `R` split are gone; `divergence::` and its tests are intact,
+because the engine is correct and the redesign is about where it appears.
+
+`D` stays, against the first draft of SPEC §8. The handoff's case is about the
+default dashboard, and a key you have to know about taxes nobody. Removing it
+would strand a working drill-down behind a command the TUI never mentions.
+
+Left: the divergence modal itself is un-redesigned. It is reachable only by
+`D` now, so it no longer sits on the path a default user takes, but it is
+still v1 chrome behind a v2 screen.
 
 ## Phase 9, remote port forwards (3 to 5 days, independent)
 
@@ -181,5 +214,13 @@ The script runs `tests/demo_verify.rs` first and refuses to publish a GIF whose
 beats do not hold, because a demo that shows a defect is worse than no demo.
 The two share their key counts so they cannot drift apart silently.
 
-What the GIF shows today is phase 0: the current screens telling the truth. It
-grows a beat per phase, and the phase is not done until its beat is in there.
+The GIF covers phases 0 to 3: the hosts table filled from hosts nobody has a
+session on, the offline row that explains itself, `r` meaning one thing again,
+and the health screen. It grows a beat per phase, and the phase is not done
+until its beat is in there.
+
+`scripts/fleet.sh` builds and stages the fixture, and `spec-demo.sh` refuses to
+run against a fleet that has drifted from it. That is not fussiness: staging
+lives in the containers' running state, a restart loses it, and the first
+symptom is `demo_verify` failing on "web-02 is not serving :80" and blaming
+the app for a fact about the laptop.

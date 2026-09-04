@@ -17,7 +17,9 @@ DEMO_HOME="$SCRATCH/home"
 KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519}"
 OUT="docs/media/essh-spec-demo.gif"
 
-# The fixture fleet from SPEC.md §2.
+# The fixture fleet from SPEC.md §2. Eleven hosts, and staging-web-01 is the
+# one that does not answer: `scripts/fleet.sh` keeps that container stopped, so
+# the offline row in the demo is drawn from a probe that actually failed.
 HOSTS=(
   "web-01:127.0.0.11:prod:us-east:web"
   "web-02:127.0.0.12:prod:us-east:web"
@@ -26,25 +28,26 @@ HOSTS=(
   "db-02:127.0.0.15:prod:us-east:db"
   "cache-01:127.0.0.16:prod:us-west:cache"
   "edge-01:127.0.0.17:prod:us-east:edge"
-  "build-01:127.0.0.18:staging:us-west:build"
+  "build-01:127.0.0.18:ci:us-west:build"
   "monitor-01:127.0.0.19:prod:us-west:monitor"
   "staging-web-01:127.0.0.20:staging:us-east:web"
+  "jump-01:127.0.0.21:prod:us-east:jump"
 )
+OFFLINE_HOST=staging-web-01
 
 cleanup() { [ -n "${KEEP:-}" ] || rm -rf "$SCRATCH"; }
 trap cleanup EXIT
 
 need() { command -v "$1" >/dev/null || { echo "need $1" >&2; exit 1; }; }
 
-# ── the fleet has to be up, or nothing below means anything ───────────────
-for spec in "${HOSTS[@]}"; do
-  IFS=: read -r name ip _ _ _ <<<"$spec"
-  ssh -p 2222 -o BatchMode=yes -o StrictHostKeyChecking=no \
-      -o UserKnownHostsFile=/dev/null -o ConnectTimeout=4 \
-      -i "$KEY" "matt@$ip" true 2>/dev/null \
-    || { echo "$name is not reachable on $ip:2222" >&2; exit 1; }
-done
-echo "fleet: 10 hosts up"
+# ── the fleet has to be the fixture, or nothing below means anything ──────
+#
+# Reachability is not enough. The staging that makes these hosts interesting
+# lives in their running state, and a container restart keeps the filesystem
+# and loses the processes — so the fleet comes back reachable and unstaged, and
+# the verification below fails on a fact about the laptop rather than about
+# essh. `fleet.sh check` reports that drift; `fleet.sh up` fixes it.
+./scripts/fleet.sh check
 
 # ── verify before rendering ───────────────────────────────────────────────
 cargo build --release

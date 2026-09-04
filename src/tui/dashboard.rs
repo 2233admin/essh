@@ -42,6 +42,7 @@ pub fn render(
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),             // one line of chrome
+            Constraint::Length(1),             // the reference's band under the tabs
             Constraint::Min(8),                // main content
             Constraint::Length(footer_height), // footer (+ search bar)
         ])
@@ -60,7 +61,7 @@ pub fn render(
 
     match active_tab {
         super::DashboardTab::Sessions => {
-            render_sessions_tab(f, chunks[1], sessions, selected_session, theme)
+            render_sessions_tab(f, chunks[2], sessions, selected_session, theme)
         }
         super::DashboardTab::Hosts => {
             // One full-width panel. v1 filled the space under a short host
@@ -69,7 +70,7 @@ pub fn render(
             // lets it breathe.
             render_hosts_tab(
                 f,
-                chunks[1],
+                chunks[2],
                 hosts,
                 filtered_indices,
                 selected_host,
@@ -77,13 +78,13 @@ pub fn render(
                 theme,
             );
         }
-        super::DashboardTab::Health => render_health_tab(f, chunks[1], hosts, selected_host, theme),
-        super::DashboardTab::Config => render_config_tab(f, chunks[1], theme),
+        super::DashboardTab::Health => render_health_tab(f, chunks[2], hosts, selected_host, theme),
+        super::DashboardTab::Config => render_config_tab(f, chunks[2], theme),
     }
 
     render_footer(
         f,
-        chunks[2],
+        chunks[3],
         active_tab,
         status_message,
         search_active,
@@ -233,7 +234,7 @@ fn render_sessions_tab(
 /// actually occupies rather than for one column.
 fn render_hosts_tab(
     f: &mut Frame,
-    area: Rect,
+    full: Rect,
     hosts: &[super::HostDisplay],
     filtered_indices: &[usize],
     selected: usize,
@@ -251,6 +252,12 @@ fn render_hosts_tab(
         crate::format::count(hosts.len(), "host"),
         refreshed
     );
+    // Sized to its rows. A box stretched to the bottom of the window reads as
+    // a list that failed to load rather than as a fleet of eleven.
+    let area = Rect {
+        height: ((filtered_indices.len() as u16) + 3).min(full.height),
+        ..full
+    };
     let inner = d::pane(
         f,
         area,
@@ -259,13 +266,15 @@ fn render_hosts_tab(
             key: Some("1"),
             title: Some("hosts"),
             sub: Some(&sub),
+            // Panel-specific keys only. The screen's footer carries the
+            // ones bound everywhere, and printing both lists twice is how a
+            // screen ends up with two footers disagreeing about which keys
+            // it has.
             foot_left: &[
                 ("↑↓", " select"),
                 ("⏎", " connect"),
                 ("r", " reconnect"),
-                ("a", " add"),
-                ("e", " edit"),
-                ("/", " search"),
+                ("D", " divergence"),
             ],
             ..Default::default()
         },
@@ -664,17 +673,28 @@ fn render_health_tab(
     // Every panel is sized to its content. A box stretched over empty space
     // reads as missing data rather than as an absence of problems.
     let attention_height = (attention.len().max(1) as u16 + 3).min(area.height / 2);
-    let card_height = if attention.is_empty() { 0 } else { 9 };
+    // Five content lines plus the border. `pane` hangs its title on the top
+    // edge and its hints on the bottom, so a panel taller than its content
+    // shows the gap between the two, which reads as a row that failed to
+    // render.
+    let card_height = if attention.is_empty() { 0 } else { 7 };
     // The bottom row is as tall as its taller panel's content: reachability
     // is one row per host, busiest is five. Anything beyond that is empty
     // box, which reads as missing data rather than as nothing to report.
-    let bottom_height = (hosts.len().max(5) as u16 + 2)
-        .min(area.height.saturating_sub(attention_height + card_height));
+    let bottom_height = (hosts.len().max(5) as u16 + 3).min(
+        area.height
+            .saturating_sub(attention_height + card_height + 2),
+    );
+    // The reference's 20-26px panel gaps. Without them a panel's bottom hints
+    // sit on the row above the next panel's title, and the two read as one
+    // broken border.
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(attention_height),
+            Constraint::Length(1),
             Constraint::Length(card_height),
+            Constraint::Length(if card_height > 0 { 1 } else { 0 }),
             Constraint::Length(bottom_height),
             Constraint::Min(0),
         ])
@@ -682,14 +702,18 @@ fn render_health_tab(
 
     render_attention(f, rows[0], hosts, &attention, theme);
     if card_height > 0 {
-        render_health_cards(f, rows[1], &attention, theme);
+        render_health_cards(f, rows[2], &attention, theme);
     }
     let bottom = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(rows[2]);
+        .constraints([
+            Constraint::Percentage(50),
+            Constraint::Length(2),
+            Constraint::Percentage(50),
+        ])
+        .split(rows[4]);
     render_busiest(f, bottom[0], hosts, theme);
-    render_reachability(f, bottom[1], hosts, selected, theme);
+    render_reachability(f, bottom[2], hosts, selected, theme);
 }
 
 /// Panel 1 — the most important panel in v2.
@@ -1312,24 +1336,21 @@ fn render_footer(
     // handoff prints one footer on all six screens, which is how it comes to
     // advertise `d detach` on the screen where `d` is download.
     let pairs: &[(&str, &str)] = match tab {
-        super::DashboardTab::Health => &[
-            ("⏎", "open host"),
-            ("r", "reconnect"),
-            ("^P", "menu"),
-            ("q", "quit"),
-        ],
-        super::DashboardTab::Hosts => &[
-            ("⏎", "connect"),
-            ("r", "reconnect"),
+        super::DashboardTab::Hosts | super::DashboardTab::Health => &[
             ("m", "monitor"),
             ("a", "add"),
             ("e", "edit"),
             ("/", "search"),
-            ("D", "divergence"),
+            ("F1", "help"),
             ("^P", "menu"),
             ("q", "quit"),
         ],
-        _ => &[("⏎", "connect"), ("^P", "menu"), ("q", "quit")],
+        _ => &[
+            ("⏎", "connect"),
+            ("F1", "help"),
+            ("^P", "menu"),
+            ("q", "quit"),
+        ],
     };
     lines.push(d::footer_line(pairs, theme));
 

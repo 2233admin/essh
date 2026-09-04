@@ -9,9 +9,12 @@
 # test is what verifies it. Change one, change the other — the key counts are
 # shared deliberately (DOWNS_TO_EDGE).
 #
-# The fleet is the fixture from SPEC.md §2: ten Debian containers on
-# 127.0.0.11-20:2222, each with its own hostname, staged to disagree the way a
-# real fleet does. Every hash, rate and listing is collected over live SSH.
+# The fleet is the fixture from SPEC.md §2: eleven Debian containers on
+# 127.0.0.11-21:2222, each with its own hostname, staged by scripts/fleet.sh.
+# staging-web-01 is kept stopped, so the offline row is drawn from a probe that
+# actually failed, and build-01 runs three named busy loops so the busiest
+# panel has something real to collapse. Every rate, listing and process name is
+# collected over live SSH.
 #
 # 150x34 — the geometry the design reference was authored at (SPEC.md §6.1).
 # Width/Height are calibrated to produce exactly that with this font, size,
@@ -85,18 +88,22 @@ Sleep 1s
 Enter
 Sleep 5s
 
-# ── 4 · the hosts screen ───────────────────────────────────────────────
-# Seven hosts read "never probed" — not "0", which would be a claim.
+# ── 4 · the hosts screen, with readings for hosts nobody is on ─────────
+# Eight of the eleven have no session. Before v2 essh could not collect
+# metrics for those at all: the collector needs an established handle, so a
+# host without a session had nothing but a TCP probe. Every meter here comes
+# from a sweep over a warm connection the fleet sampler opened.
 Ctrl+A
 Sleep 400ms
 Type "d"
 Sleep 1200ms
 Type "2"
-Sleep 3500ms
+Sleep 5s
 
-# ── 5 · walk the cursor to the outlier ─────────────────────────────────
-# Three presses, and the marker is on the row it says it is. It used to be
-# three presses because the count and the row position disagreed.
+# ── 5 · the row that has no readings, and says why ─────────────────────
+# staging-web-01 is a container that is down. Its five measurement columns
+# become one explanation carrying the key that fixes it, rather than five
+# blanks or five confident zeroes.
 Down
 Sleep 500ms
 Down
@@ -104,25 +111,32 @@ Sleep 500ms
 Down
 Sleep 1500ms
 
-# ── 6 · the key that lied, split into three ────────────────────────────
-# `r` was advertised as probe and performed a reload that discarded every
-# measurement. It now reports the split rather than acting.
+# ── 6 · `r` means one thing again ──────────────────────────────────────
+# v0.3.3 advertised `r` as probe and performed a reload that discarded every
+# measurement. It spent one release refusing to act. It now retries the host
+# under the cursor and clears the sampler's back-off, because doing only the
+# first would look like the key half worked.
 Type "r"
 Sleep 2500ms
-Type "R"
-Sleep 2500ms
 
-# ── 7 · the fleet, and a cursor you can see ────────────────────────────
-# The selection survived a reload that reorders the list, and the outliers
-# panel draws the marker it walks.
+# ── 7 · health: what to look at, in words ──────────────────────────────
+# Screen 3 was fleet configuration consensus — an agreement percentage and a
+# facet grid. It is now the attention list, the cards, the busiest processes
+# across the whole fleet, and reachability. The offline host is in the
+# attention list because unreachable needs attention, which is the entry the
+# handoff drops.
 Type "3"
-Sleep 4s
+Sleep 5s
 Down
 Sleep 1200ms
 Up
 Sleep 1200ms
 
-# ── 8 · why edge-01 is the odd one out ─────────────────────────────────
+# ── 8 · the drill-down is still there, behind a key ────────────────────
+# Configuration divergence leaves the default dashboard and keeps its modal.
+# `essh diff <tag>` answers the same question outside the TUI.
+Type "2"
+Sleep 1s
 Type "D"
 Sleep 6s
 Escape

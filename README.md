@@ -22,10 +22,15 @@
 
 <p align="center">
   A pure-Rust SSH client with a dense, Netwatch-style TUI. Multiple sessions,
-  live host metrics, and fleet-wide divergence — without leaving the terminal.
+  and live metrics for every host in your config, not just the one you are
+  attached to.
 </p>
 
-![ESSH Demo](https://raw.githubusercontent.com/matthart1983/essh/main/docs/media/essh-demo.gif)
+![ESSH Demo](https://raw.githubusercontent.com/matthart1983/essh/main/docs/media/essh-spec-demo.gif)
+
+Recorded against eleven Debian containers over real SSH. One of them is
+deliberately switched off, which is why one row explains itself instead of
+showing numbers.
 
 ## Install
 
@@ -88,29 +93,67 @@ prefix.
 |---|---|
 | **Multiple sessions** | Tabs and splits in one window, with per-session scrollback and reconnect. |
 | **Live host monitor** | CPU, memory, disk, network and top processes, sampled in the background so the view is warm when you open it. No agent — plain SSH exec channels. |
-| **Divergence** | Compares each host against its peer set and tells you *which* host differs, on *which* facet, and why. |
+| **Fleet health** | The same readings for every host in your config, including the ones you have no session on. What needs attention, in sentences, with the process responsible named. |
+| **Divergence** | On request: compares each host against its peer set and tells you *which* host differs, on *which* facet, and why. |
 | **File transfer** | Two-pane local/remote browser over SFTP. |
 | **Port forwarding** | Add, inspect and remove forwards without dropping the session. |
 | **Audit and replay** | Structured JSON audit log; sessions record to asciicast for replay. |
 
+### Fleet health
+
+Eleven hosts, and one of them is the one you should be looking at. A column of
+green dots structurally cannot tell you which.
+
+The hosts screen carries CPU, memory, disk and RTT for **every host in your
+config**, not only the one you are attached to. Nothing runs on them: essh
+opens one connection per host, keeps it warm, and runs one command on it every
+few seconds. A host that answers but will not give up its numbers says so; a
+host that never answered shows no numbers at all, and never a `0`.
+
+The health screen leads with what is wrong, in words:
+
+```
+1  needs attention  │  2 of 11 hosts
+
+   build-01         cpu 94%   over 90% for 4m — cargo build in session 4
+   staging-web-01   offline   no answer on 10.0.4.20:22 since 12:10 · no session was open
+```
+
+and says so when nothing is:
+
+```
+nothing needs attention · 11 hosts reachable, none over threshold
+```
+
+Under it: cards for the hosts that need watching, the busiest processes across
+the whole fleet with identical siblings collapsed, and one RTT graph per host.
+
+A host that has gone away keeps its last reading and is labelled as showing
+one. A host that never answered is not the same thing and does not pretend to
+be. `r` reconnects or retries, everywhere it appears.
+
 ### Divergence
 
 Forty web servers, thirty-nine fine, and one with a different kernel or a
-hand-edited `nginx.conf`. A column of green dots structurally cannot show you
-that.
+hand-edited `nginx.conf`. That question is worth asking and is not worth
+putting in a column everybody has to read, so it is a command:
 
-ESSH groups hosts into peer sets by tag, collects the same facts from each,
-and scores every host against the group's consensus:
-
-```
-100.0% of 16 facet-checks agree
-0 facets diverge across 0 hosts.
-2 hosts have never been probed, so their facets are unknown rather than in agreement.
+```bash
+essh diff role=web            # compare a tag's hosts, facet by facet
+essh why edge-01              # why one host will not connect
 ```
 
-The Fleet screen names the outlier and the facets behind the claim, so the
-verdict is checkable rather than asserted. Facts it cannot collect are
-reported as uncollected — never as agreement.
+```
+role=web  95.4% agree · 146 of 153 checks · 3 of 9 hosts at consensus
+
+edge-01
+  timezone                     IST+0100 · 8 of 9 peers have UTC+0000
+  /etc/ssh/sshd_config         d362f7b1a9f7f3b7 · 8 of 9 peers have adf24088ca9817ee
+```
+
+Hosts it could not reach are named and excluded, never counted as agreeing.
+`D` on the hosts screen opens the same comparison for the host under the
+cursor.
 
 ## Themes
 
@@ -160,6 +203,7 @@ essh workspace list | open | save | show | remove
 essh session list | replay <id>
 essh diag <session-id>        # diagnostics for a past session
 essh why <host>               # explain why a host will not connect
+essh diff <tag>               # compare configuration across a tag's hosts
 essh audit tail --lines 20
 essh bench                    # published performance numbers
 ```
