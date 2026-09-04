@@ -384,16 +384,19 @@ Bottom row: two panels, `(146 - 2) / 2 = 72`, inner 68.
 Forwards `4 22 20 12 Fill`, gaps 2, four of them: LAST CHECK = 146 - 58 - 8 =
 80. The failed row's reason is 51.
 
-The add-forward row sits outside the table, on its own line, and carries only
-the form that works:
+The add-forward row sits outside the table, on rows of its own, and carries
+both directions now that both work:
 
 ```
-a  add forward   L 127.0.0.1:PORT → HOST:PORT
+a  add forward   L PORT:HOST:PORT   here → there: we listen, they answer
+                 R PORT:HOST:PORT   there → here: they listen, we answer
 ```
 
-`R` is accepted and refused with a reason until §6.4 lands. Advertising a
-binding that reports failure is better than advertising one that lies, and both
-are worse than not advertising it.
+LAST CHECK says when the state was established, not when it was probed:
+`bound 4s ago`, `no listener on 8080 — bind refused · just now`. §6.3 settled
+on the bind result *being* the state, so a probe time would be a claim about a
+check nobody ran. The stamp moves only when the state changes; a connection
+count ticking up is not a rebind.
 
 ### 3.5 Help
 
@@ -646,19 +649,45 @@ listener, so the bind result is the state. `portfwd::bind_forward` returns the
 reason. Active carries a connection count from a real counter. Shipped in
 phase 0.
 
-### 6.4 Remote forwards, still not implemented
+### 6.4 Remote forwards, done, and what the two blockers turned out to be
 
-Two prerequisites in `ssh/mod.rs`:
+Only one of them was real.
 
-1. `SshSession.handle` is `Arc<Handle<_>>` and `tcpip_forward` needs `&mut`.
-   Either move to `Arc<Mutex<Handle>>` or hold a dedicated forwarding handle.
-   The metrics sampler and the shell channel share this handle, so measure the
-   contention before choosing.
-2. `server_channel_open_forwarded_tcpip` accepts the channel and drops it. It
-   has to route to the registered forward and proxy to the local target.
+**`tcpip_forward` needs `&mut`.** It does, and it does not need to:
+`cancel_tcpip_forward` sits next to it in russh 0.55 taking `&self`, and both
+bodies send one message on an mpsc and await a oneshot. The `&mut` is
+incidental. We cannot change that from here, so the choice was what to pay
+instead.
 
-Until then `R` is refused with a reason, which is the honest state, and §3.4
-keeps it off the add-forward row.
+`Arc<Mutex<Handle>>` was this document's first answer and it is the wrong one.
+Every existing caller shares that handle — the metrics sweep, the divergence
+collector, the file browser, the shell — so the lock is contended by
+everything. Held across a sweep it blocks the shell; held narrowly it means
+changing eight helper signatures that take `&Handle`.
+
+What ships instead: a second connection, opened the first time a session asks
+for a remote forward and used for nothing else. It costs one handshake and one
+extra line in the host's auth log, paid only by sessions that use the feature.
+That is a different trade from the sampler's in §6.1, where the alternative was
+a handshake per poll forever, and it leaves 31 call sites alone.
+
+**Channels were dropped.** This one was real and worse than it sounds.
+`server_channel_open_forwarded_tcpip` accepted the channel and returned, so
+whoever connected on the remote side got a socket that would never answer. A
+hang, not a refusal: the far end cannot tell it from a slow service.
+
+`portfwd::remote::Router` holds the routes and the handler proxies to them. It
+matches on the port alone when the address does not match, because OpenSSH
+reports the address it bound rather than the string it was asked for, and
+refusing over that mismatch would be pedantry with a hang attached.
+
+Deleting a remote forward tells the server. A row removed while the server
+keeps listening is the same class of lie as a row listed while nothing is
+bound, one layer further away.
+
+`fleet::remote_forward_live` proves it against a real sshd: the server accepts,
+the channel comes back, the bytes arrive, the connection is counted, and
+cancelling stops the server listening.
 
 ### 6.5 Broadcast
 

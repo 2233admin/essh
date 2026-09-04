@@ -121,7 +121,7 @@ CPU cannot differ. Fixing that means lxcfs in the fixture image or a sampler
 that reads cgroup counters — needed before a screenshot of this fixture says
 anything about a real fleet, not needed to verify the screens.
 
-## Phase 4, sessions (3 to 4 days)
+## Phase 4, sessions (done)
 
 The landing screen, and the one v2 promotes to primary.
 
@@ -138,7 +138,7 @@ The landing screen, and the one v2 promotes to primary.
 
 Steps 4 and 5 are independent of 1 to 3 and of each other.
 
-## Phase 5, terminal, files, forwards (3 days)
+## Phase 5, terminal, files, forwards (done)
 
 1. Session chips with per-host severity dots, so trouble is visible without
    leaving the session. Meta line counts forwards that **bound**, not rules.
@@ -148,14 +148,14 @@ Steps 4 and 5 are independent of 1 to 3 and of each other.
    highlighting, transfer rate and ETA.
 4. Forwards to the phase 0 state model, add-forward row `L` only.
 
-## Phase 6, help and config (1 to 2 days)
+## Phase 6, help and config (done)
 
 `key_grid` from phase 0 generalises to the two labelled columns at the widths
 of SPEC §3.5. Palette results are sessions and hosts, never settings, with the
 population of SPEC §2.7. Config panel entries wrap to two lines rather than
 clip.
 
-## Phase 7, themes (2 to 3 days)
+## Phase 7, themes (done)
 
 Nine palettes times five new slots, plus SPEC §5.3 for `terminal` and darkened
 severity hues for `light`. A screenshot per theme per screen, reviewed side by
@@ -176,11 +176,24 @@ Left: the divergence modal itself is un-redesigned. It is reachable only by
 `D` now, so it no longer sits on the path a default user takes, but it is
 still v1 chrome behind a v2 screen.
 
-## Phase 9, remote port forwards (3 to 5 days, independent)
+## Phase 9, remote port forwards (done)
 
-SPEC §6.4's two prerequisites in `ssh/mod.rs`. Only then does `add_remote` come
-back and the add-forward row grow its second form. Until it does, `R` is
-refused with a reason, which is the honest state.
+SPEC §6.4 has the account, including which of its two blockers turned out not
+to be one. `add_remote` is back, the add-forward row has both forms, and
+`fleet::remote_forward_live` proves the feature against a real sshd rather
+than against a router unit test that could not have caught any of it.
+
+## After the phases: one app, not nine
+
+Screens built one at a time over nine phases drift, and the drift is invisible
+from inside any one of them. `tui::consistency` is the sweep: one corner radius
+everywhere, the same header on every dashboard screen, nothing written past its
+width at any size, nothing blank at a usable size, and the keys bound
+everywhere advertised everywhere.
+
+It found the last one by hand first — the add-host dialog was still a
+square-cornered `Borders::ALL` box among rounded panels, which is a difference
+a reader takes for meaning, because everywhere else in this app it is one.
 
 ## Risks
 

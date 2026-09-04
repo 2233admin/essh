@@ -2013,3 +2013,129 @@ mod search_selection_tests {
         assert_eq!(app.filtered_host_indices().len(), 2);
     }
 }
+
+/// Consistency across screens, not correctness within one.
+///
+/// Every check here is something a reader would take for meaning if it
+/// differed: a square corner among rounded ones, a screen that forgets which
+/// tab it is on, a key that means one thing here and another there. Screens
+/// were built one at a time over nine phases, and this is the sweep that says
+/// they are one app.
+#[cfg(test)]
+mod consistency {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    fn screen(view: AppView, tab: DashboardTab, w: u16, h: u16) -> String {
+        let mut app = App::new(4);
+        app.view = view;
+        app.dashboard_tab = tab;
+        let mut term = Terminal::new(TestBackend::new(w, h)).expect("terminal");
+        term.draw(|f| render(f, &mut app)).expect("draw");
+        let buf = term.backend().buffer();
+        (0..h)
+            .map(|y| {
+                (0..w)
+                    .map(|x| buf[(x, y)].symbol().chars().next().unwrap_or(' '))
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn dashboard_tabs() -> [DashboardTab; 4] {
+        [
+            DashboardTab::Sessions,
+            DashboardTab::Hosts,
+            DashboardTab::Health,
+            DashboardTab::Config,
+        ]
+    }
+
+    /// One corner radius for the whole app.
+    ///
+    /// The add-host dialog was the last `Borders::ALL` box: three overlays,
+    /// two of them rounded and one not. A reader takes that for meaning,
+    /// because everywhere else in this app a difference in chrome is one.
+    #[test]
+    fn every_panel_has_the_same_corners() {
+        for tab in dashboard_tabs() {
+            let s = screen(AppView::Dashboard, tab, 150, 34);
+            for square in ['┌', '┐', '└', '┘'] {
+                assert!(
+                    !s.contains(square),
+                    "{tab:?} draws a square corner `{square}` among rounded ones:\n{s}"
+                );
+            }
+        }
+    }
+
+    /// The header is on every dashboard screen, and it is the same header.
+    #[test]
+    fn every_dashboard_screen_carries_the_same_chrome() {
+        for tab in dashboard_tabs() {
+            let s = screen(AppView::Dashboard, tab, 150, 34);
+            let first = s.lines().next().unwrap_or_default();
+            assert!(first.contains("ESSH"), "{tab:?} has no header: {first:?}");
+            for (n, label, _) in chrome::TABS {
+                assert!(
+                    first.contains(&format!("{n} {label}")),
+                    "{tab:?}'s header is missing the `{n} {label}` tab: {first:?}"
+                );
+            }
+        }
+    }
+
+    /// Nothing overflows its width, on any screen, at any size the smoke
+    /// tests sweep. A line wider than the terminal wraps, and a wrapped line
+    /// in a table is a row that has silently become two.
+    #[test]
+    fn no_screen_writes_past_its_width() {
+        for tab in dashboard_tabs() {
+            for (w, h) in [(60u16, 20u16), (80, 24), (100, 30), (150, 34), (200, 50)] {
+                let s = screen(AppView::Dashboard, tab, w, h);
+                for (i, line) in s.lines().enumerate() {
+                    assert!(
+                        crate::design::width_of(line) <= w as usize,
+                        "{tab:?} line {i} is {} cells at width {w}",
+                        crate::design::width_of(line)
+                    );
+                }
+            }
+        }
+    }
+
+    /// A screen at its floor still says something. `render_smoke` proves
+    /// nothing panics; this proves nothing is blank, which is the failure a
+    /// user actually meets.
+    #[test]
+    fn no_screen_is_blank_at_a_usable_size() {
+        for tab in dashboard_tabs() {
+            for (w, h) in [(60u16, 16u16), (80, 24), (150, 34)] {
+                let s = screen(AppView::Dashboard, tab, w, h);
+                let ink = s.chars().filter(|c| !c.is_whitespace()).count();
+                assert!(
+                    ink > 20,
+                    "{tab:?} at {w}x{h} draws {ink} characters, which is not a screen:\n{s}"
+                );
+            }
+        }
+    }
+
+    /// SPEC §4.2. A footer that advertises a key the screen ignores is the
+    /// defect the whole keymap module exists to prevent, and it is easiest to
+    /// reintroduce by adding a hint rather than a handler.
+    #[test]
+    fn the_stable_footer_keys_are_on_every_dashboard_screen() {
+        for tab in dashboard_tabs() {
+            let s = screen(AppView::Dashboard, tab, 150, 34);
+            for key in ["^P", "q"] {
+                assert!(
+                    s.contains(key),
+                    "{tab:?} does not advertise `{key}`, which is bound everywhere:\n{s}"
+                );
+            }
+        }
+    }
+}

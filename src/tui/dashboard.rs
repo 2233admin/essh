@@ -4,7 +4,7 @@ use crate::theme::Theme;
 use crate::tui::widgets;
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Clear, Paragraph, TableState},
+    widgets::{Block, Clear, Paragraph, TableState},
 };
 
 /// Render the dashboard view (no active session focused)
@@ -2013,29 +2013,34 @@ pub fn render_add_host_dialog(
 
     f.render_widget(Clear, popup);
 
-    let surface_style = Style::default()
-        .fg(theme.text_primary)
-        .bg(theme.selection_bg);
-    let title = if editing { " Edit Host " } else { " Add Host " };
+    // The panel idiom, like the palette and the divergence card. This was the
+    // last square-cornered `Borders::ALL` box in the app: three overlays, two
+    // of them rounded, was a difference a reader would take for meaning.
+    let surface_style = Style::default().fg(theme.text_primary).bg(theme.panel_alt);
+    let title = if editing { "edit host" } else { "add host" };
     let hint = if editing {
-        "  Update user@host[:port] or host[:port] for the selected host."
+        "Update user@host[:port] or host[:port] for the selected host."
     } else {
-        "  Enter user@host[:port] or host[:port]."
+        "Enter user@host[:port] or host[:port]."
     };
 
-    let block = Block::default()
-        .title(title)
-        .title_style(
-            Style::default()
-                .fg(theme.brand)
-                .bg(theme.selection_bg)
-                .bold(),
-        )
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.brand).bg(theme.selection_bg))
-        .style(surface_style);
-    let inner = block.inner(popup);
-    f.render_widget(block, popup);
+    f.render_widget(Block::default().style(surface_style), popup);
+    let inner = d::pane(
+        f,
+        popup,
+        theme,
+        &d::PanelOpts {
+            title: Some(title),
+            focused: true,
+            foot_left: &[("⏎", " save"), ("⎋", " cancel")],
+            ..Default::default()
+        },
+    );
+    let inner = Rect {
+        x: inner.x + 1,
+        width: inner.width.saturating_sub(2),
+        ..inner
+    };
 
     let mut lines = vec![
         Line::styled(
