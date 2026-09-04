@@ -393,6 +393,19 @@ pub enum AppView {
     FileBrowser,
 }
 
+/// What a session is doing, or why we cannot say. SPEC §6.2.
+///
+/// Three different absences used to render as one `—`: the pty lookup has not
+/// answered yet, the lookup gave up, and the sweep has not covered that pty.
+/// They need different words, for the same reason `dropped` and `offline` do.
+pub enum SessionWork {
+    Running {
+        command: Option<String>,
+        cpu: Option<f64>,
+    },
+    Absent(&'static str),
+}
+
 pub struct App {
     pub hosts: Vec<HostDisplay>,
     pub selected_host: usize,
@@ -587,7 +600,16 @@ impl App {
             .iter()
             .enumerate()
             .map(|(i, s)| {
-                let (running, cpu_pct) = self.session_detail(i);
+                let (running, cpu_pct, absent) = match self.session_detail(i) {
+                    SessionWork::Running { command, cpu } => (
+                        // The eleven-cell column wants what you would call it, not
+                        // the argv `ps` reports.
+                        command.map(|c| crate::monitor::command_label(&c)),
+                        cpu,
+                        "—",
+                    ),
+                    SessionWork::Absent(why) => (None, None, why),
+                };
                 let host_state = self
                     .hosts
                     .iter()
@@ -605,6 +627,7 @@ impl App {
                     last_line: s.terminal.last_output_line(),
                     idle: crate::format::short_duration(s.idle_secs()),
                     dropped: s.is_dropped(),
+                    absent,
                 }
             })
             .collect()
@@ -647,26 +670,39 @@ impl App {
     /// Both come from the host sweep, keyed by the pty the session reported
     /// at connect. A dropped session has no live process tree, so it gets
     /// neither rather than the last reading dressed as a current one.
-    pub fn session_detail(&self, idx: usize) -> (Option<String>, Option<f64>) {
+    pub fn session_detail(&self, idx: usize) -> SessionWork {
         let Some(session) = self.session_manager.sessions.get(idx) else {
-            return (None, None);
+            return SessionWork::Absent("—");
         };
         if session.is_dropped() {
-            return (None, None);
+            // No live process tree, and a stale percentage in a live column
+            // is the defect the state model exists to stop.
+            return SessionWork::Absent("—");
         }
         let Some(tty) = session.tty.as_deref() else {
-            return (None, None);
+            // Three absences, three words. `—` for all of them is what sent
+            // an afternoon into working out which one was happening.
+            return SessionWork::Absent(if session.wants_tty_lookup() || session.tty_pending {
+                "…"
+            } else {
+                "no pty"
+            });
         };
         let Some(host) = self
             .hosts
             .iter()
             .find(|h| h.hostname == session.hostname && h.port == session.port)
         else {
-            return (None, None);
+            return SessionWork::Absent("—");
         };
         match host.vitals.by_tty.get(tty) {
-            Some(t) => (t.foreground.clone(), Some(t.cpu_pct)),
-            None => (None, None),
+            Some(t) => SessionWork::Running {
+                command: t.foreground.clone(),
+                cpu: Some(t.cpu_pct),
+            },
+            // The pty is known and the sweep has not reported on it yet, or
+            // reported and found nothing on it.
+            None => SessionWork::Absent("…"),
         }
     }
 

@@ -322,6 +322,58 @@ pub struct ProcessInfo {
     pub tty: String,
 }
 
+/// The short name for a command, for a column too narrow for its arguments.
+///
+/// SPEC §2.2's RUNNING column is eleven cells, and the design's examples are
+/// `deploy.sh`, `pg_dump`, `cargo build` — what you would say you were
+/// running. `ps` gives the full argv, so a perl script arrives as
+/// `/usr/bin/perl /usr/local/bin/nightly-verify /usr` and truncates to
+/// `/usr/bin/p…`, which names the interpreter and nothing else.
+///
+/// Two rules, and no more, because guessing harder gets things wrong:
+///
+/// 1. A path becomes its basename. `/usr/local/bin/nightly-verify` is
+///    `nightly-verify`; nobody reads the directory off this column.
+/// 2. A known interpreter followed by a path is the path. `perl foo.pl` is
+///    `foo.pl`, because the interpreter is how it runs and not what it is.
+///
+/// Everything else is left exactly as it came. `sshd: matt@pts/0` and
+/// `postgres: pg_dump` carry their shape deliberately, `-bash` is a login
+/// shell rather than a path, and `cargo build` is already the answer.
+pub fn command_label(argv: &str) -> String {
+    const INTERPRETERS: [&str; 8] = [
+        "perl", "python", "python3", "ruby", "node", "sh", "bash", "zsh",
+    ];
+
+    let mut parts = argv.split_whitespace();
+    let Some(first) = parts.next() else {
+        return argv.to_string();
+    };
+    // Anything with the shape of a message rather than a command is left be.
+    if first.ends_with(':') || first.starts_with('-') || first.starts_with('[') {
+        return argv.to_string();
+    }
+
+    let base = |t: &str| t.rsplit('/').next().unwrap_or(t).to_string();
+    let head = base(first);
+    let rest: Vec<&str> = parts.collect();
+
+    if INTERPRETERS.contains(&head.as_str()) {
+        // The first argument that is not a flag and looks like a file.
+        if let Some(script) = rest.iter().find(|a| !a.starts_with('-')) {
+            return base(script);
+        }
+    }
+    if rest.is_empty() {
+        return head;
+    }
+    // A subcommand is part of the name: `cargo build`, `git fetch`.
+    match rest[0] {
+        a if a.starts_with('-') || a.starts_with('/') => head,
+        a => format!("{head} {a}"),
+    }
+}
+
 /// A run of identical processes, as one row.
 ///
 /// Defect 7 of the v0.3.3 list: eleven of fifteen process rows were identical
@@ -594,5 +646,50 @@ mod tests {
         assert!(problems
             .iter()
             .all(|(_, e)| e == "uncollected · ssh channel closed"));
+    }
+}
+
+#[cfg(test)]
+mod command_label_tests {
+    use super::command_label;
+
+    /// The design's own examples, which are what a person would say they
+    /// were running.
+    #[test]
+    fn a_command_reads_as_its_name() {
+        assert_eq!(command_label("cargo build --release"), "cargo build");
+        assert_eq!(command_label("/usr/bin/pg_dump events"), "pg_dump events");
+        assert_eq!(command_label("./deploy.sh --release 2.14.4"), "deploy.sh");
+    }
+
+    /// The one that started this: an eleven-cell column showed
+    /// `/usr/bin/p…`, which names the interpreter and nothing else.
+    #[test]
+    fn an_interpreter_is_not_the_name_of_the_thing_it_runs() {
+        assert_eq!(
+            command_label("/usr/bin/perl /usr/local/bin/nightly-verify /usr"),
+            "nightly-verify"
+        );
+        assert_eq!(command_label("python3 -u /opt/etl/load.py"), "load.py");
+        assert_eq!(command_label("/bin/sh /usr/local/bin/backup"), "backup");
+    }
+
+    /// And the shapes that carry meaning are left exactly as they came.
+    #[test]
+    fn a_command_that_is_already_a_sentence_is_left_alone() {
+        for as_is in [
+            "sshd: matt@pts/0",
+            "postgres: pg_dump",
+            "nginx: worker process",
+            "-bash",
+        ] {
+            assert_eq!(command_label(as_is), as_is);
+        }
+    }
+
+    #[test]
+    fn a_bare_command_is_itself() {
+        assert_eq!(command_label("redis-server"), "redis-server");
+        assert_eq!(command_label(""), "");
     }
 }

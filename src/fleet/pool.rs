@@ -11,10 +11,20 @@
 //!    drawn. `Auth::for_sampling` refuses an encrypted key up front and the
 //!    host reports `unreadable` with the reason, which is a row you can read
 //!    rather than a hang you cannot.
-//! 2. **It reuses a session's handle when there is one.** `SshSession.handle`
-//!    is an `Arc` for exactly this, so a host you are attached to costs no
-//!    second connection, no second auth, and no second entry in its `w`
-//!    output.
+//! 2. **It does not reuse a session's handle, and SPEC §6.1 was wrong to say
+//!    it should.** Sharing looked free: `SshSession.handle` is an `Arc`
+//!    precisely so background work can hold it, and a host you are attached
+//!    to would cost no second connection.
+//!
+//!    What that misses is flow control. A shell producing heavily fills the
+//!    connection's window, and every other channel on that connection waits —
+//!    so the sweep for the one host doing something interesting is the sweep
+//!    that stalls, and its session's RUNNING and CPU columns stay blank while
+//!    the idle hosts beside it report fine. Measured, not reasoned: a session
+//!    running a checksum sweep starved its own metrics for its whole life.
+//!
+//!    So the pool always opens its own connection. A host with a session on
+//!    it has two: the shell's, and one that cannot be starved by it.
 //! 3. **A broken connection is dropped, not retried in place.** The next
 //!    sweep opens a new one, and `sampler`'s back-off decides how soon that
 //!    is.
@@ -70,13 +80,6 @@ impl FleetPool {
         Self::default()
     }
 
-    /// Hand the pool a handle it did not open. Called when a session
-    /// connects, so the sampler stops opening its own connection to a host
-    /// you are already on.
-    pub async fn adopt(&self, hostname: &str, port: u16, handle: Arc<Handle<ClientHandler>>) {
-        self.warm.lock().await.insert(key(hostname, port), handle);
-    }
-
     pub async fn forget(&self, hostname: &str, port: u16) {
         self.warm.lock().await.remove(&key(hostname, port));
     }
@@ -121,7 +124,14 @@ impl FleetPool {
     /// model is built to avoid.
     pub async fn run(&self, cfg: &ConnectConfig, command: &str) -> Result<Output, String> {
         let handle = self.handle_for(cfg).await?;
-        match exec_on(&handle, command).await {
+        // Bounded. A connection that has stopped answering does not fail, it
+        // waits — and a sweep task that waits forever holds its host out of
+        // every subsequent cycle, so the row goes stale with nothing to say
+        // it has.
+        let result = tokio::time::timeout(cfg.timeout, exec_on(&handle, command))
+            .await
+            .unwrap_or_else(|_| Err(format!("no answer after {}s", cfg.timeout.as_secs())));
+        match result {
             Ok(out) => Ok(out),
             Err(e) => {
                 self.forget(&cfg.hostname, cfg.port).await;

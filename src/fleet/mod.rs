@@ -572,3 +572,146 @@ mod remote_forward_live {
         session.close().await.ok();
     }
 }
+
+/// Per-session pty attribution, against a real shell. SPEC §6.2.
+///
+/// `discover_tty` has no unit test that could mean anything: its whole
+/// content is a claim about how sshd arranges its child processes. This opens
+/// a real interactive channel, starts a real job on it, and asks the two
+/// questions the sessions screen asks — which pty is this session's, and what
+/// is on it.
+#[cfg(test)]
+mod pty_attribution_live {
+    use std::time::Duration;
+
+    use crate::ssh::{AuthMethod, ConnectConfig, SshClient};
+
+    fn cfg() -> ConnectConfig {
+        ConnectConfig {
+            hostname: "127.0.0.14".into(),
+            port: 2222,
+            username: "matt".into(),
+            auth: AuthMethod::KeyFile {
+                path: std::path::PathBuf::from(std::env::var("HOME").expect("HOME"))
+                    .join(".ssh/id_ed25519"),
+                passphrase: None,
+            },
+            timeout: Duration::from_secs(10),
+        }
+    }
+
+    fn reachable() -> bool {
+        use std::net::{SocketAddr, TcpStream};
+        let addr: SocketAddr = "127.0.0.14:2222".parse().expect("addr");
+        TcpStream::connect_timeout(&addr, Duration::from_millis(600)).is_ok()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_session_is_attributed_to_its_pty_and_its_work() {
+        if !reachable() {
+            eprintln!("SKIP: fixture fleet not up; run ./scripts/fleet.sh up");
+            return;
+        }
+
+        let (session, _, _) = SshClient::connect(&cfg()).await.expect("connect");
+
+        // A real interactive shell, as a session has.
+        let mut shell = session
+            .handle
+            .channel_open_session()
+            .await
+            .expect("channel");
+        shell
+            .request_pty(false, "xterm-256color", 150, 34, 0, 0, &[])
+            .await
+            .expect("pty");
+        shell.request_shell(true).await.expect("shell");
+        tokio::time::sleep(Duration::from_millis(800)).await;
+
+        let tty = super::pool::discover_tty(&session.handle)
+            .await
+            .expect("the session's pty was not found");
+        assert!(
+            tty.starts_with("pts/"),
+            "discover_tty answered {tty:?}, which is not a pty"
+        );
+
+        // Give the shell something to be doing, and drain it as a real
+        // session does. Leaving a shell channel unread stalls the whole
+        // connection once the far end starts producing: russh's flow control
+        // blocks and every other channel on that connection waits forever.
+        //
+        // That is not hypothetical. The first version of this test did not
+        // drain, and hung on the lookup below rather than failing — which is
+        // the same reason the app must never await an exec inline on its
+        // event loop, where the freeze would be the whole UI.
+        shell
+            .data(&b"nightly-verify /usr\n"[..])
+            .await
+            .expect("write");
+        let pump = tokio::spawn(async move {
+            while let Some(msg) = shell.wait().await {
+                if matches!(msg, russh::ChannelMsg::Close | russh::ChannelMsg::Eof) {
+                    break;
+                }
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(3000)).await;
+
+        // The same lookup with the job running, which is the order the app
+        // does it in: a session appears, the user types, and only then does
+        // the tick come round.
+        let busy = tokio::time::timeout(
+            Duration::from_secs(10),
+            super::pool::discover_tty(&session.handle),
+        )
+        .await
+        .expect("the lookup hung on a busy session")
+        .expect("the pty was not found once the session was busy");
+        assert_eq!(
+            busy, tty,
+            "the pty answer changed once the session had work on it"
+        );
+
+        let mut sampler = super::sampler::FleetSampler::new(Duration::from_millis(1), 4, 8);
+        let pool = super::pool::FleetPool::new();
+        let cmd = sampler.due(&["db-01".into()], std::time::Instant::now())[0]
+            .command
+            .clone();
+        // Two sweeps: the first has nothing to difference CPU against.
+        for _ in 0..2 {
+            let raw = pool.exec(&cfg(), &cmd).await;
+            sampler.record("db-01", raw, std::time::Instant::now());
+            tokio::time::sleep(Duration::from_millis(600)).await;
+        }
+        let raw = pool.exec(&cfg(), &cmd).await;
+        let super::sampler::Outcome::Read(sample) =
+            sampler.record("db-01", raw, std::time::Instant::now())
+        else {
+            panic!("the sweep did not read");
+        };
+
+        let entry = sample.by_tty.get(&tty).unwrap_or_else(|| {
+            panic!(
+                "the sweep found no processes on {tty}; it knows about {:?}",
+                sample.by_tty.keys().collect::<Vec<_>>()
+            )
+        });
+        assert!(
+            entry
+                .foreground
+                .as_deref()
+                .is_some_and(|f| f.contains("nightly") || f.contains("perl")),
+            "the pty's foreground process is {:?}, not the job running on it",
+            entry.foreground
+        );
+        assert!(
+            entry.cpu_pct > 1.0,
+            "a pty running a checksum sweep reports {:.1}% CPU",
+            entry.cpu_pct
+        );
+
+        pump.abort();
+        session.close().await.ok();
+    }
+}

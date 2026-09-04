@@ -88,6 +88,14 @@ struct TuiState {
     fleet_sample_task: Option<FleetSampleTask>,
     /// Per-host broadcast replies, drained each tick. SPEC §6.5.
     broadcast_rx: Option<tokio::sync::mpsc::Receiver<(String, tui::broadcast::Reply)>>,
+    /// Facet sweeps in flight, by host name, so one is not started again
+    /// underneath itself.
+    facts_in_flight: std::collections::HashSet<String>,
+    facts_rx: Option<FactsReceiver>,
+    facts_tx: Option<FactsSender>,
+    /// Answers from the per-session pty lookups. SPEC §6.2.
+    tty_rx: Option<tokio::sync::mpsc::Receiver<(usize, Option<String>)>>,
+    tty_tx: Option<tokio::sync::mpsc::Sender<(usize, Option<String>)>>,
     /// Set once, the first time sampling is refused for a reason the user can
     /// act on. Repeating it every five seconds would be a status bar.
     fleet_sample_refusal: Option<String>,
@@ -103,6 +111,51 @@ struct TuiState {
 type FleetProbeTask = tokio::task::JoinHandle<Vec<(String, u16, fleet::ProbeResult)>>;
 /// Host name, and the sweep's raw output or the reason there is none.
 type FleetSampleTask = tokio::task::JoinHandle<Vec<(String, Result<String, String>)>>;
+/// What one facet sweep produced: the facts, what was collectable, and the
+/// platform it ran against. `None` when the host could not be read.
+type FactsResult = Option<(
+    divergence::HostFacts,
+    (usize, usize, usize),
+    monitor::Platform,
+)>;
+type FactsSender = tokio::sync::mpsc::Sender<(String, FactsResult)>;
+type FactsReceiver = tokio::sync::mpsc::Receiver<(String, FactsResult)>;
+
+/// One host's facet sweep, off the event loop.
+async fn collect_facts_for(
+    handle: std::sync::Arc<russh::client::Handle<ssh::ClientHandler>>,
+    name: String,
+    known_platform: monitor::Platform,
+    config_paths: Vec<String>,
+    packages: Vec<String>,
+) -> FactsResult {
+    // Reuse the platform the metrics collector detected if it has one. It
+    // usually will not: metrics only sweep while the monitor is open, so
+    // gating divergence on that made facets collect *only* if you happened to
+    // visit the monitor first.
+    let platform = if known_platform == monitor::Platform::Undetected {
+        let raw = divergence::collect::probe_uname(&handle)
+            .await
+            .unwrap_or_default();
+        monitor::Platform::from_uname(&raw)
+    } else {
+        known_platform
+    };
+    if !platform.is_supported() {
+        return None;
+    }
+    let facts =
+        divergence::collect::collect_facts(&handle, &name, &platform, &config_paths, &packages)
+            .await;
+    // Record what was collectable, so the overlay reports the comparison
+    // actually attempted rather than the size of the facet table.
+    let coverage = (
+        divergence::collect::collectable_count(&platform, &config_paths, &packages).0,
+        divergence::collect::collectable_count(&platform, &config_paths, &packages).1,
+        divergence::collect::privileged_count(&platform, &config_paths, &packages),
+    );
+    Some((facts, coverage, platform))
+}
 
 impl ReconnectTracker {
     fn new(max_retries: u32) -> Self {
@@ -953,6 +1006,11 @@ async fn tui_main_loop(
         fleet_sample_task: None,
         fleet_sample_refusal: None,
         broadcast_rx: None,
+        facts_in_flight: Default::default(),
+        facts_rx: None,
+        facts_tx: None,
+        tty_rx: None,
+        tty_tx: None,
         pending_connect: None,
     };
 
@@ -988,9 +1046,26 @@ async fn tui_main_loop(
         }
 
         // Poll session output (non-blocking drain from all active sessions)
+        //
+        // Bounded per pass. This drained each channel until empty, which is
+        // fine until a session produces faster than `vt100` can parse — and
+        // then the loop never exits, the frame is never drawn, and no key is
+        // ever read. A `tail -f` on a busy log freezes the whole app, and the
+        // symptom is not "the shell is fast", it is "essh stopped
+        // responding".
+        //
+        // The channel is bounded at 256, so what is left waits there and the
+        // reader task back-pressures the remote. That is the correct place
+        // for the queue: in the buffer, not in the event loop.
+        const MAX_CHUNKS_PER_PASS: usize = 32;
         for (i, rx_opt) in session_output_rxs.iter_mut().enumerate() {
             if let Some(rx) = rx_opt {
+                let mut drained = 0usize;
                 loop {
+                    if drained >= MAX_CHUNKS_PER_PASS {
+                        break;
+                    }
+                    drained += 1;
                     match rx.try_recv() {
                         Ok(data) => {
                             if let Some(session) = app.session_manager.sessions.get_mut(i) {
@@ -1076,6 +1151,22 @@ async fn tui_main_loop(
                         }
                     }
 
+                    if let Some(rx) = tui_state.facts_rx.as_mut() {
+                        let mut applied = false;
+                        while let Ok((name, out)) = rx.try_recv() {
+                            tui_state.facts_in_flight.remove(&name);
+                            if let Some((facts, coverage, platform)) = out {
+                                app.host_coverage.insert(name.clone(), coverage);
+                                app.host_platforms.insert(name.clone(), platform);
+                                app.host_facts.insert(name, facts);
+                                applied = true;
+                            }
+                        }
+                        if applied {
+                            app.recompute_divergence();
+                        }
+                    }
+
                     if let Some(task) = tui_state.fleet_sample_task.take() {
                         task.abort();
                     }
@@ -1156,6 +1247,22 @@ async fn tui_main_loop(
                     }
                     if !app.broadcast.in_flight() {
                         tui_state.broadcast_rx = None;
+                    }
+                }
+
+                if let Some(rx) = tui_state.facts_rx.as_mut() {
+                    let mut applied = false;
+                    while let Ok((name, out)) = rx.try_recv() {
+                        tui_state.facts_in_flight.remove(&name);
+                        if let Some((facts, coverage, platform)) = out {
+                            app.host_coverage.insert(name.clone(), coverage);
+                            app.host_platforms.insert(name.clone(), platform);
+                            app.host_facts.insert(name, facts);
+                            applied = true;
+                        }
+                    }
+                    if applied {
+                        app.recompute_divergence();
                     }
                 }
 
@@ -1266,6 +1373,19 @@ async fn tui_main_loop(
                         })
                         .collect();
 
+                    // Spawned, never awaited here.
+                    //
+                    // This ran inline on the event loop, and an exec on a
+                    // connection whose shell is producing heavily blocks on
+                    // flow control — so a session running anything chatty
+                    // froze the entire UI on the next facet sweep. No key, no
+                    // frame, no clock, for as long as the shell kept talking.
+                    // It presented as essh hanging at random, thirty seconds
+                    // into a session, with nothing on screen to connect it to
+                    // the thing that was actually producing output.
+                    //
+                    // Bounded as well as spawned: a sweep that never returns
+                    // must not hold its host out of every later one.
                     for (i, hostname, port) in sessions {
                         let Some(Some(rt)) = runtimes.get(i) else {
                             continue;
@@ -1276,50 +1396,40 @@ async fn tui_main_loop(
                         // divergence on that made facets collect *only* if you
                         // happened to visit the monitor first. Probe `uname`
                         // ourselves when it is unknown — once per host.
-                        let platform = match &rt.monitor {
-                            Some(mon) => mon.platform().await,
-                            None => monitor::Platform::Undetected,
-                        };
-                        let platform = if platform == monitor::Platform::Undetected {
-                            let raw = divergence::collect::probe_uname(&rt.ssh_session.handle)
-                                .await
-                                .unwrap_or_default();
-                            monitor::Platform::from_uname(&raw)
-                        } else {
-                            platform
-                        };
-                        if !platform.is_supported() {
-                            continue;
-                        }
                         let Some(name) = app.host_name_for(&hostname, port) else {
                             continue;
                         };
+                        if tui_state.facts_in_flight.contains(&name) {
+                            continue;
+                        }
+                        tui_state.facts_in_flight.insert(name.clone());
 
-                        let facts = divergence::collect::collect_facts(
-                            &rt.ssh_session.handle,
-                            &name,
-                            &platform,
-                            &config.divergence.config_paths,
-                            &config.divergence.packages,
-                        )
-                        .await;
-                        // Record what was collectable here, so the overlay
-                        // reports the comparison actually attempted rather
-                        // than the size of the facet table.
-                        let (usable, total) = divergence::collect::collectable_count(
-                            &platform,
-                            &config.divergence.config_paths,
-                            &config.divergence.packages,
-                        );
-                        let privileged = divergence::collect::privileged_count(
-                            &platform,
-                            &config.divergence.config_paths,
-                            &config.divergence.packages,
-                        );
-                        app.host_coverage
-                            .insert(name.clone(), (usable, total, privileged));
-                        app.host_platforms.insert(name.clone(), platform);
-                        app.host_facts.insert(name, facts);
+                        let handle = std::sync::Arc::clone(&rt.ssh_session.handle);
+                        let known = match &rt.monitor {
+                            Some(mon) => mon.platform().await,
+                            None => monitor::Platform::Undetected,
+                        };
+                        let paths = config.divergence.config_paths.clone();
+                        let packages = config.divergence.packages.clone();
+                        let tx = match tui_state.facts_tx.clone() {
+                            Some(tx) => tx,
+                            None => {
+                                let (tx, rx) = tokio::sync::mpsc::channel(8);
+                                tui_state.facts_rx = Some(rx);
+                                tui_state.facts_tx = Some(tx.clone());
+                                tx
+                            }
+                        };
+                        tokio::spawn(async move {
+                            let out = tokio::time::timeout(
+                                std::time::Duration::from_secs(20),
+                                collect_facts_for(handle, name.clone(), known, paths, packages),
+                            )
+                            .await
+                            .ok()
+                            .flatten();
+                            tx.send((name, out)).await.ok();
+                        });
                     }
                     app.recompute_divergence();
 
@@ -1432,26 +1542,63 @@ async fn tui_main_loop(
 
                 // Which pty is which session's. SPEC §6.2.
                 //
-                // Asked once per session, over the session's own connection,
-                // and never again: a pty does not move. Everything the
-                // sessions screen shows after this comes from the fleet
-                // sweep, so the RUNNING and CPU columns add no polling at
-                // all.
+                // Asked until answered, over the session's own connection.
+                // Everything the sessions screen shows after that comes from
+                // the fleet sweep, so the RUNNING and CPU columns add no
+                // polling at all.
+                //
+                // Spawned, never awaited here. An exec on a connection whose
+                // shell is producing heavily can block on flow control, and
+                // awaiting one on the event loop freezes the whole UI —
+                // including the frame that would have shown the shell doing
+                // the producing. Timed out for the same reason: a lookup that
+                // never returns must not hold the attempt counter open.
+                if let Some(rx) = tui_state.tty_rx.as_mut() {
+                    while let Ok((i, found)) = rx.try_recv() {
+                        if let Some(session) = app.session_manager.sessions.get_mut(i) {
+                            session.tty_attempts = session.tty_attempts.saturating_add(1);
+                            if found.is_some() {
+                                session.tty = found;
+                            }
+                            session.tty_pending = false;
+                        }
+                    }
+                }
                 for (i, rt) in runtimes.iter().enumerate() {
                     let Some(rt) = rt else { continue };
-                    let asked = app
+                    let wants = app
                         .session_manager
                         .sessions
                         .get(i)
-                        .is_none_or(|s| s.tty_probed);
-                    if asked {
+                        .is_some_and(|s| s.wants_tty_lookup());
+                    if !wants {
                         continue;
                     }
-                    let found = fleet::pool::discover_tty(&rt.ssh_session.handle).await;
                     if let Some(session) = app.session_manager.sessions.get_mut(i) {
-                        session.tty = found;
-                        session.tty_probed = true;
+                        session.tty_pending = true;
                     }
+                    // One channel for every session's answers, made on first
+                    // need rather than at startup: a run with no sessions
+                    // never makes one.
+                    let tx = match tui_state.tty_tx.clone() {
+                        Some(tx) => tx,
+                        None => {
+                            let (tx, rx) = tokio::sync::mpsc::channel(8);
+                            tui_state.tty_rx = Some(rx);
+                            tui_state.tty_tx = Some(tx.clone());
+                            tx
+                        }
+                    };
+                    let handle = std::sync::Arc::clone(&rt.ssh_session.handle);
+                    tokio::spawn(async move {
+                        let found = tokio::time::timeout(
+                            std::time::Duration::from_secs(5),
+                            fleet::pool::discover_tty(&handle),
+                        )
+                        .await
+                        .unwrap_or(None);
+                        tx.send((i, found)).await.ok();
+                    });
                 }
 
                 // ── Fleet metrics (SPEC §6.1) ────────────────────────
@@ -1465,26 +1612,6 @@ async fn tui_main_loop(
                     let names: Vec<String> = app.hosts.iter().map(|h| h.name.clone()).collect();
                     let now = std::time::Instant::now();
                     let due = tui_state.fleet_sampler.due(&names, now);
-
-                    // Rule 2 of the pool: a host you already have a session
-                    // on costs no second connection. `SshSession.handle` is
-                    // an `Arc` for exactly this. Done here rather than at
-                    // connect time so the pool never has to be threaded
-                    // through the connection path.
-                    for (i, rt) in runtimes.iter().enumerate() {
-                        let Some(rt) = rt else { continue };
-                        let Some(session) = app.session_manager.sessions.get(i) else {
-                            continue;
-                        };
-                        tui_state
-                            .fleet_pool
-                            .adopt(
-                                &session.hostname,
-                                session.port,
-                                rt.ssh_session.handle.clone(),
-                            )
-                            .await;
-                    }
 
                     let mut jobs = Vec::new();
                     for sweep in due {
@@ -2973,16 +3100,35 @@ async fn handle_dashboard_key(
     // the handoff's three-way collision on the digits, and it is one branch
     // rather than a mode.
     if app.dashboard_tab == DashboardTab::Sessions {
-        match key.code {
-            KeyCode::Tab => {
-                app.sessions_panel = app.sessions_panel.next();
-                return Ok(KeyAction::Handled);
+        // The focused panel gets first refusal, and only then does Tab cycle
+        // panels. The other order looks the same until a panel wants Tab for
+        // itself: broadcast uses it to move between the target and the
+        // command, and the cycler was taking it — so the command went to the
+        // hosts table instead, where `m` opened a monitor and Enter attached
+        // to a session. A key that is captured before the thing using it can
+        // decline is not a binding, it is an ambush.
+        let editing = app.sessions_panel == tui::SessionsPanel::Broadcast && app.broadcast.editing;
+        if !editing {
+            match key.code {
+                KeyCode::Tab => {
+                    app.sessions_panel = app.sessions_panel.next();
+                    return Ok(KeyAction::Handled);
+                }
+                KeyCode::BackTab => {
+                    app.sessions_panel = app.sessions_panel.prev();
+                    return Ok(KeyAction::Handled);
+                }
+                // Focus is sticky, which is right — you do not want it
+                // springing back while you read a broadcast's replies — and
+                // sticky focus needs a way out. Without this, `Enter` after a
+                // broadcast sent another broadcast instead of attaching to
+                // the session under the cursor, with no key that said so.
+                KeyCode::Esc if app.sessions_panel != tui::SessionsPanel::Table => {
+                    app.sessions_panel = tui::SessionsPanel::Table;
+                    return Ok(KeyAction::Handled);
+                }
+                _ => {}
             }
-            KeyCode::BackTab => {
-                app.sessions_panel = app.sessions_panel.prev();
-                return Ok(KeyAction::Handled);
-            }
-            _ => {}
         }
         if app.sessions_panel == tui::SessionsPanel::QuickConnect {
             if let KeyCode::Char(c @ '1'..='9') = key.code {
@@ -4065,6 +4211,24 @@ async fn open_session_inner(
                 .open_shell("xterm-256color", cols as u32, rows as u32)
                 .await?;
 
+            // Which pty this session owns. SPEC §6.2, asked here rather than
+            // on a tick, and this is the whole reason:
+            //
+            // An exec on a connection whose shell is producing heavily blocks
+            // on flow control. A session running anything chatty — which is
+            // the session the RUNNING and CPU columns exist for — could not
+            // be asked at all, and the columns read `…` for its lifetime
+            // while the quiet sessions beside it answered fine.
+            //
+            // Right here the pty exists and nothing has written to it. One
+            // round trip on a path that has already made several.
+            let tty = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                fleet::pool::discover_tty(&ssh_session.handle),
+            )
+            .await
+            .unwrap_or(None);
+
             // Set up channel I/O forwarding
             let (output_tx, output_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
             let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<SessionInput>(64);
@@ -4151,6 +4315,13 @@ async fn open_session_inner(
             if let Some(session) = app.session_manager.sessions.get_mut(idx) {
                 session.state = SessionState::Active;
                 session.jump_host = ssh_session.jump_host.clone();
+                session.tty = tty;
+                // A host that answered here is not asked again. One that did
+                // not still gets the tick's retries, which is what covers a
+                // restored workspace or a reconnect.
+                if session.tty.is_some() {
+                    session.tty_attempts = crate::session::TTY_ATTEMPTS;
+                }
             }
 
             audit.log_session_event(

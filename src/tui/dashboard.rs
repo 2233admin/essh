@@ -196,6 +196,9 @@ pub struct SessionRow {
     pub last_line: Option<String>,
     pub idle: String,
     pub dropped: bool,
+    /// What to show where a value would go, when there is none. SPEC §6.2:
+    /// three different absences, three different words.
+    pub absent: &'static str,
 }
 
 /// A host with no session, for the quick-connect panel.
@@ -433,7 +436,7 @@ impl SessionCols {
         );
         push(
             d::fit_left(
-                s.running.as_deref().unwrap_or("—"),
+                s.running.as_deref().unwrap_or(s.absent),
                 self.running,
                 Style::default().fg(if s.running.is_some() {
                     t.text_primary
@@ -451,7 +454,7 @@ impl SessionCols {
             d::fit_right(
                 &s.cpu_pct
                     .map(|c| format!("{c:.1}%"))
-                    .unwrap_or_else(|| "—".into()),
+                    .unwrap_or_else(|| s.absent.to_string()),
                 self.cpu,
                 Style::default().fg(match s.cpu_pct {
                     // A dropped session has no live tree, so this is `—`, and
@@ -514,7 +517,7 @@ fn render_quick_connect(
             sub: Some(&crate::format::count(quick.len(), "host")),
             focused,
             foot_left: if focused {
-                &[("1-9", " open"), ("⇥", " next panel")]
+                &[("1-9", " open"), ("⇥", " next"), ("⎋", " back")]
             } else {
                 &[("⇥", " focus")]
             },
@@ -603,7 +606,12 @@ fn render_broadcast(
             sub: Some(&status),
             focused,
             foot_left: if focused {
-                &[("t", " target"), ("i", " command"), ("⏎", " send")]
+                &[
+                    ("t", " target"),
+                    ("i", " command"),
+                    ("⏎", " send"),
+                    ("⎋", " back"),
+                ]
             } else {
                 &[("⇥", " focus")]
             },
@@ -2333,6 +2341,7 @@ mod sessions_tests {
             last_line: last.map(|s| s.to_string()),
             idle: "1s".into(),
             dropped: false,
+            absent: "—",
         }
     }
 

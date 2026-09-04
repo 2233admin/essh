@@ -372,17 +372,26 @@ impl FleetSampler {
 
 /// Group a host's processes by controlling terminal.
 ///
-/// The foreground pick is the part worth reading twice. `ps` marks every
-/// member of a terminal's foreground process group with `+`, so a shell
-/// waiting on `cargo build` marks both. Taking the first would report
-/// `-bash` for a host that is compiling. Taking the leaf — the `+` process
-/// that is nobody else's ancestor — reports `cargo build`, which is what the
-/// column is for.
+/// The foreground pick is the part worth reading twice, and it took two goes.
 ///
-/// `ps aux` gives no ppid, so "leaf" is approximated by the highest PID among
-/// the foreground set. A child is started after its parent and so has the
-/// later pid, except across a pid wrap, which needs a 32-bit counter to have
-/// gone round between a shell starting and its own child starting.
+/// `ps` marks every member of a terminal's foreground process group with `+`,
+/// so a shell waiting on `cargo build` marks both. Taking the first reports
+/// `-bash` for a host that is compiling, which is useless.
+///
+/// The first fix took the deepest one instead, and that is wrong the other
+/// way: for a job that shells out, it reports the helper. A session running
+/// `nightly-verify` reported `find`; a session running `cargo build` would
+/// report `rustc`. The design is explicit about this — RUNNING says
+/// `cargo build` and the busiest-processes panel says `rustc` — because they
+/// answer different questions. RUNNING is *what you started*.
+///
+/// The rule that is actually right is simpler than either, and the reason is
+/// the bit worth knowing: **a shell running a job is not in its own
+/// foreground process group**. `bash` shows `Ss` while `cargo build` shows
+/// `S+`. So the foreground set is the job and its descendants, and the one
+/// the shell started is the lowest pid in it — a child is always started
+/// after its parent. At a prompt the shell *is* the foreground group and is
+/// the only member, so the same rule answers `-bash`.
 pub fn roll_up_by_tty(procs: &[ProcessInfo]) -> HashMap<String, TtySummary> {
     let mut out: HashMap<String, TtySummary> = HashMap::new();
     for p in procs {
@@ -394,11 +403,11 @@ pub fn roll_up_by_tty(procs: &[ProcessInfo]) -> HashMap<String, TtySummary> {
         entry.process_count += 1;
     }
     for (tty, summary) in out.iter_mut() {
-        summary.foreground = procs
+        let group: Vec<&ProcessInfo> = procs
             .iter()
             .filter(|p| &p.tty == tty && p.is_foreground())
-            .max_by_key(|p| p.pid)
-            .map(|p| p.name.clone());
+            .collect();
+        summary.foreground = group.iter().min_by_key(|p| p.pid).map(|p| p.name.clone());
     }
     out
 }
@@ -438,6 +447,7 @@ USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND
 matt 1 3.1 0.1 1000 1700 ? Ss 09:00 0:01 nginx: master
 matt 40 0.5 0.1 1000 3600 pts/0 Ss 09:00 0:01 -bash
 matt 41 61.0 4.0 9000 840000 pts/0 S+ 09:01 0:30 pg_dump events
+matt 44 0.4 0.1 1000 2200 pts/0 R+ 09:01 0:02 gzip
 matt 42 0.9 0.1 1000 3600 pts/1 Ss+ 09:00 0:01 -bash
 ===END===
 ";
@@ -616,7 +626,8 @@ matt 42 0.9 0.1 1000 3600 pts/1 Ss+ 09:00 0:01 -bash
 
     /// SPEC §6.2. A pty's processes are one session's process tree, and the
     /// foreground pick is what makes the column say `pg_dump` rather than
-    /// `-bash` for a shell that is waiting on one.
+    /// `-bash` for a shell that is waiting on one — or `find`, which is what
+    /// picking the deepest one gave for a job that shells out.
     #[test]
     fn processes_roll_up_per_terminal() {
         let mut s = sampler();
@@ -631,17 +642,38 @@ matt 42 0.9 0.1 1000 3600 pts/1 Ss+ 09:00 0:01 -bash
         assert_eq!(sample.by_tty.len(), 2);
 
         let busy = sample.by_tty.get("pts/0").expect("pts/0");
-        assert!((busy.cpu_pct - 61.5).abs() < 0.01, "{:?}", busy.cpu_pct);
-        assert_eq!(busy.process_count, 2);
+        assert!((busy.cpu_pct - 61.9).abs() < 0.01, "{:?}", busy.cpu_pct);
+        assert_eq!(busy.process_count, 3);
         assert_eq!(
             busy.foreground.as_deref(),
             Some("pg_dump events"),
-            "a shell waiting on a command is not what the session is running"
+            "RUNNING is what the shell started, not the shell — which is not \
+             even in the foreground group while a job runs — and not the \
+             helper the job shelled out to"
         );
 
         let idle = sample.by_tty.get("pts/1").expect("pts/1");
         assert_eq!(idle.foreground.as_deref(), Some("-bash"));
         assert_eq!(idle.process_count, 1);
+    }
+
+    /// A shell at a prompt *is* its terminal's foreground group, so the same
+    /// rule answers `-bash` there without a special case.
+    #[test]
+    fn a_shell_at_a_prompt_is_its_own_foreground_group() {
+        let procs = vec![crate::monitor::ProcessInfo {
+            pid: 42,
+            name: "-bash".into(),
+            cpu_pct: 0.0,
+            mem_pct: 0.1,
+            mem_rss_kb: 3600,
+            state: "Ss+".into(),
+            tty: "pts/1".into(),
+        }];
+        assert_eq!(
+            roll_up_by_tty(&procs)["pts/1"].foreground.as_deref(),
+            Some("-bash")
+        );
     }
 
     /// A pty with nothing in the foreground has no answer, and says so rather

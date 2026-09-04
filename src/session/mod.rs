@@ -160,6 +160,14 @@ fn convert_color(color: vt100::Color) -> Option<ratatui::style::Color> {
     }
 }
 
+/// How many times to ask a host which pty a session owns before giving up.
+///
+/// Five, a tick apart. Enough to outlast a shell that is still being forked
+/// when we first look; few enough that a host which cannot answer — a
+/// restricted shell, a platform with no `ps` — is asked five times rather
+/// than every hundred milliseconds forever.
+pub const TTY_ATTEMPTS: u8 = 5;
+
 /// Represents a single SSH session
 pub struct Session {
     #[allow(dead_code)]
@@ -179,9 +187,21 @@ pub struct Session {
     /// asked. `None` means we have not asked or could not tell, and the
     /// RUNNING and CPU columns say so rather than guessing.
     pub tty: Option<String>,
-    /// Set once a tty lookup has been attempted, so a host that cannot
-    /// answer is asked once rather than every tick.
-    pub tty_probed: bool,
+    /// How many times the pty lookup has been attempted.
+    ///
+    /// Not a bool. It was, and a bool cannot tell "we asked and the host said
+    /// no" from "we asked half a second too early". A session is in
+    /// `runtimes` the moment its shell channel is opened, and the shell
+    /// process is not always a child of the connection's sshd yet — so the
+    /// first lookup can find no pty at all, and one attempt meant RUNNING and
+    /// CPU stayed `—` for the life of that session.
+    ///
+    /// Bounded, because a host that genuinely cannot answer must not be asked
+    /// forever. `TTY_ATTEMPTS` tries, spaced a tick apart.
+    pub tty_attempts: u8,
+    /// True while a lookup is in flight, so a slow one is not started again
+    /// on every tick underneath itself.
+    pub tty_pending: bool,
 }
 
 impl Session {
@@ -207,12 +227,18 @@ impl Session {
             jump_host: None,
             last_output_at: Instant::now(),
             tty: None,
-            tty_probed: false,
+            tty_attempts: 0,
+            tty_pending: false,
         }
     }
 
     pub fn uptime_secs(&self) -> u64 {
         self.created_at.elapsed().as_secs()
+    }
+
+    /// Whether the pty lookup should run again.
+    pub fn wants_tty_lookup(&self) -> bool {
+        self.tty.is_none() && !self.tty_pending && self.tty_attempts < TTY_ATTEMPTS
     }
 
     pub fn idle_secs(&self) -> u64 {
@@ -243,5 +269,57 @@ impl Session {
             self.state,
             SessionState::Reconnecting { .. } | SessionState::Disconnected { .. }
         )
+    }
+}
+
+#[cfg(test)]
+mod tty_lookup_tests {
+    use super::*;
+
+    fn session() -> Session {
+        Session::new(
+            "id".into(),
+            "db-01".into(),
+            "127.0.0.14".into(),
+            2222,
+            "matt".into(),
+            1000,
+        )
+    }
+
+    /// A session is in `runtimes` the moment its shell channel opens, and the
+    /// shell process is not always a child of the connection's sshd yet. One
+    /// attempt meant a lookup half a second early left RUNNING and CPU at `—`
+    /// for the life of that session, with nothing on screen to say why.
+    #[test]
+    fn a_lookup_that_was_too_early_is_tried_again() {
+        let mut s = session();
+        assert!(s.wants_tty_lookup(), "a fresh session is never asked");
+
+        // The shell has not appeared yet.
+        s.tty_attempts += 1;
+        assert!(s.wants_tty_lookup(), "one miss ended the search");
+
+        // And not started again underneath itself while one is in flight: an
+        // exec on a busy connection can take seconds, and the tick is 100ms.
+        s.tty_pending = true;
+        assert!(!s.wants_tty_lookup(), "a lookup was started twice over");
+        s.tty_pending = false;
+
+        s.tty_attempts += 1;
+        s.tty = Some("pts/0".into());
+        assert!(!s.wants_tty_lookup(), "an answered session is asked again");
+    }
+
+    /// And a host that genuinely cannot answer is asked a bounded number of
+    /// times, not every tick forever.
+    #[test]
+    fn a_host_that_cannot_answer_is_not_asked_forever() {
+        let mut s = session();
+        for _ in 0..TTY_ATTEMPTS {
+            assert!(s.wants_tty_lookup());
+            s.tty_attempts += 1;
+        }
+        assert!(!s.wants_tty_lookup(), "the lookup never gives up");
     }
 }

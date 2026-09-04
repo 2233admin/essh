@@ -305,6 +305,21 @@ fn the_demo_beats_match_the_spec() {
     let s = tui.frame("3 · third session up");
     universal_rules(&s, "sessions");
 
+    // ── beat 3a · give a session something to be doing ───────────────────
+    //
+    // The sessions screen's RUNNING, CPU and LAST LINE columns are the point
+    // of it, and three idle shells demonstrate none of them. A verbose
+    // archive to /dev/null streams filenames and burns CPU: real work, and
+    // still going when the screen that reports it appears.
+    // One long-lived process, from `scripts/fleet.sh`. A single `tar` over
+    // /usr finishes in under a second here and the screen it exists for is
+    // eight seconds away; a loop of short commands runs forever and still
+    // reports near-zero CPU, because `ps aux` gives %CPU as a lifetime
+    // average and every child is a fraction of a second old.
+    tui.type_text("nightly-verify /usr");
+    tui.send(b"\r");
+    tui.settle(3000);
+
     // ── beat 3b · the sessions screen, which v2 opens on ─────────────────
     tui.send(&[0x01]);
     tui.settle(400);
@@ -321,11 +336,35 @@ fn the_demo_beats_match_the_spec() {
     // cheapest thing on the screen is broken.
     let with_last_line = sessions
         .lines()
-        .filter(|l| l.contains("matt@") || l.contains("$"))
+        .filter(|l| l.contains("matt@") || l.contains('$') || l.contains("/usr/"))
         .count();
     assert!(
         with_last_line >= 2,
         "the LAST LINE column is empty for every session:\n{sessions}"
+    );
+
+    // SPEC §6.2 — RUNNING is the foreground process of the session's pty, and
+    // one of these sessions is running an archive. A table of `-bash` at 0.0%
+    // means the pty lookup failed and the columns are decoration.
+    //
+    // Checked on the row rather than the screen: `contains("tar")` passed
+    // against a screen showing `-bash` three times, because 34 rows of a TUI
+    // contain most short strings somewhere.
+    let running_row = sessions
+        .lines()
+        .find(|l| l.contains("db-01") && l.contains("attached"))
+        .unwrap_or_else(|| panic!("no attached db-01 row:\n{sessions}"));
+    // The name, not the argv. An eleven-cell column showed `/usr/bin/p…`,
+    // which names the interpreter and nothing else.
+    assert!(
+        running_row.contains("nightly-ve"),
+        "the session running a checksum sweep reports `{}`; \
+         the pty attribution failed:\n{sessions}",
+        running_row.trim()
+    );
+    assert!(
+        !running_row.contains(" 0.0%") && !running_row.contains("  —  "),
+        "a session burning a core reports no CPU:\n{running_row}"
     );
 
     // SPEC §2.1 — quick connect lists exactly the hosts with no session, and
@@ -348,6 +387,61 @@ fn the_demo_beats_match_the_spec() {
         FLEET.len() - 3,
         "quick connect offers {quick_count} of {} hosts with three sessions open:\n{sessions}",
         FLEET.len()
+    );
+
+    // ── beat 3c · quick connect takes the digits while it holds focus ────
+    //
+    // SPEC §4.1's resolution of the handoff's three-way collision: `1` cannot
+    // mean switch-tab, jump-to-session-1 and open-a-host on one screen, so
+    // the third one costs a Tab and is only live while the panel has focus.
+    tui.send(b"\t");
+    tui.settle(1200);
+    let focused = tui.frame("3c · quick connect focused");
+    universal_rules(&focused, "quick connect");
+    assert!(
+        focused.contains("Press the number to open a session."),
+        "the focused panel does not say its numbers are live:\n{focused}"
+    );
+
+    // ── beat 3d · broadcast, the one multi-host action v2 keeps ──────────
+    tui.send(b"\t");
+    tui.settle(600);
+    tui.type_text("t");
+    tui.settle(400);
+    tui.type_text("role=web");
+    tui.settle(400);
+    tui.send(b"\t");
+    tui.settle(400);
+    tui.type_text("uptime");
+    tui.settle(400);
+    tui.send(b"\r");
+    tui.settle(4000);
+    let cast = tui.frame("3d · broadcast");
+    universal_rules(&cast, "broadcast");
+    // Every target is listed from the first frame, so a broadcast to four
+    // hosts never looks like a broadcast to however many have answered.
+    let answered = cast
+        .lines()
+        .filter(|l| l.contains("exit 0") || l.contains("finished"))
+        .count();
+    assert!(
+        answered >= 2,
+        "the broadcast reported no exit statuses; it ran nowhere:\n{cast}"
+    );
+    assert!(
+        !cast.contains("running"),
+        "a broadcast to reachable hosts is still in flight after four seconds:\n{cast}"
+    );
+
+    // Focus is sticky, and sticky focus needs a way out: without one, `Enter`
+    // here sends another broadcast rather than attaching to the session under
+    // the cursor, and no key on screen says so.
+    tui.send(&[0x1b]);
+    tui.settle(600);
+    let back = tui.frame("3e · focus back on the table");
+    assert!(
+        back.contains("⏎ attach"),
+        "Esc did not return focus to the sessions table:\n{back}"
     );
 
     // ── beat 4 · the hosts screen ────────────────────────────────────────
@@ -626,6 +720,33 @@ fn the_demo_beats_match_the_spec() {
         failed.contains("2 rules") && failed.contains("1 active"),
         "the count must not include the forward that failed:\n{failed}"
     );
+
+    // ── beat 11e · a remote forward, which spent a release being refused ─
+    //
+    // SPEC §6.4. `R` was refused because `tcpip_forward` could not be called
+    // through a shared handle and the channels it needs were being dropped.
+    // Both are fixed, so this has to be a row rather than a message.
+    tui.type_text("a");
+    tui.settle(600);
+    tui.type_text("R:19090:127.0.0.1:22");
+    tui.settle(400);
+    tui.send(b"\r");
+    tui.settle(3000);
+    let remote = tui.frame("11e · a remote forward");
+    universal_rules(&remote, "remote forward");
+    assert!(
+        !remote.contains("not implemented"),
+        "remote forwards are still refused:\n{remote}"
+    );
+    assert!(
+        remote.contains("19090"),
+        "the remote forward is not listed:\n{remote}"
+    );
+    assert!(
+        remote.contains("3 rules"),
+        "the panel lost count of its rules:\n{remote}"
+    );
+
     tui.send(&[0x1b]);
     tui.settle(600);
 

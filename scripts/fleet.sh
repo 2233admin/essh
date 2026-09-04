@@ -130,7 +130,40 @@ LOADEOF
         podman exec -d "$name" nice -n 19 \
           /usr/local/bin/essh-fixture-load "${LOAD_SECS:-7200}"
       done ;;
-    db|monitor|jump)
+    db)
+      # A tool for the demo to run, not a process to leave running. The
+      # sessions screen's RUNNING, CPU and LAST LINE columns need a session
+      # that is doing something, and three idle shells demonstrate none of
+      # them — but a fixture that starts jobs nobody asked for is a fixture
+      # that lies about what the host was doing.
+      #
+      # One long-lived process rather than a loop of short ones: `ps aux`
+      # reports %CPU as a lifetime average, so a loop respawning a
+      # sub-second command reports near zero however hard it is working.
+      podman exec "$name" sh -c \
+        'cat > /usr/local/bin/nightly-verify <<"VERIFYEOF"
+#!/usr/bin/perl
+# Checksum every file under the given root, forever. Real reads, real CPU,
+# one line of real output per file — which is what the sessions screen needs
+# to have something true to show.
+my $root = shift || "/usr";
+$| = 1;
+while (1) {
+  open(my $find, "-|", "find", $root, "-xdev", "-type", "f") or die;
+  while (my $f = <$find>) {
+    chomp $f;
+    open(my $h, "<", $f) or next;
+    binmode $h;
+    my $sum = 0;
+    while (read($h, my $buf, 65536)) { $sum += unpack("%32C*", $buf) }
+    close $h;
+    printf "%-60s %08x\n", $f, $sum;
+  }
+  close $find;
+}
+VERIFYEOF
+         chmod +x /usr/local/bin/nightly-verify' ;;
+    monitor|jump)
       : ;;
     offline)
       : ;;
@@ -154,6 +187,7 @@ verify_role() {
     # what the health screen will name as the cause.
     build)    [ "$(podman exec "$name" sh -c \
                  'ps -eo args | grep -c "[e]ssh-fixture-load"')" -ge 1 ] ;;
+    db)       podman exec "$name" test -x /usr/local/bin/nightly-verify ;;
     *)        true ;;
   esac
 }
