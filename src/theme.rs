@@ -279,6 +279,13 @@ pub fn dark() -> Theme {
     }
 }
 
+/// SPEC §5.3: the light theme needs its severity hues darkened.
+///
+/// A hue chosen to read on a dark ground is chosen for luminance it does not
+/// have against a light one. `status_warn` at `#c88c00` measured 2.79:1
+/// against this background and `absent` at `#bebebe` measured 1.78:1 — the
+/// colour that means "over threshold" and the one that means "no signal",
+/// both below the 3:1 a UI element needs to be seen at all.
 pub fn light() -> Theme {
     Theme {
         name: "light",
@@ -293,7 +300,8 @@ pub fn light() -> Theme {
         text_inverse: Color::White,
         text_emphasis: Color::Rgb(0, 0, 0),
         status_good: Color::Rgb(0, 140, 60),
-        status_warn: Color::Rgb(200, 140, 0),
+        // 4.65:1, from 2.79. Amber is the hue that suffers most on paper.
+        status_warn: Color::Rgb(160, 100, 0),
         status_error: Color::Rgb(200, 40, 40),
         status_info: Color::Rgb(0, 120, 180),
         rx_rate: Color::Rgb(0, 140, 60),
@@ -303,7 +311,11 @@ pub fn light() -> Theme {
         highlight_bg: Color::Rgb(200, 215, 230),
         bg: Color::Rgb(250, 250, 248),
         muted_good: Color::Rgb(60, 160, 100),
-        absent: Color::Rgb(190, 190, 190),
+        // 3.37:1, from 1.78, and cool rather than neutral so it stays
+        // distinguishable from `text_muted`. SPEC §1: never probed is not the
+        // same as dim text, and on a light ground the old value was not the
+        // same as anything, being invisible.
+        absent: Color::Rgb(128, 138, 145),
         panel_alt: Color::Rgb(242, 242, 238),
         // The one theme where the scrollback is *lighter* than the panel:
         // paper's hole in the UI is a sheet of paper, not a shadow.
@@ -350,7 +362,10 @@ pub fn solarized() -> Theme {
         highlight_bg: violet,
         bg: base03,
         muted_good: Color::Rgb(101, 123, 0),
-        absent: base01,
+        // base00 rather than base01. SPEC §5.3: base01 is 2.79:1 on base03,
+        // and the no-signal glyph is the one thing that has to be noticed as
+        // missing.
+        absent: Color::Rgb(101, 123, 131),
         // base02, solarized's own panel tone.
         panel_alt: Color::Rgb(7, 54, 66),
         terminal_bg: Color::Rgb(0, 31, 39),
@@ -440,7 +455,9 @@ pub fn nord() -> Theme {
         highlight_bg: Color::Rgb(76, 86, 106),
         bg: polar0,
         muted_good: Color::Rgb(126, 148, 108),
-        absent: Color::Rgb(76, 86, 106),
+        // polar3 is 1.69:1 on polar0, the worst of the nine. Lifted to
+        // 3.24:1 between polar3 and frost2, so it stays a nord blue-grey.
+        absent: Color::Rgb(120, 130, 152),
         // polar1 and polar2, nord's own elevation steps.
         panel_alt: Color::Rgb(59, 66, 82),
         terminal_bg: Color::Rgb(39, 44, 54),
@@ -464,11 +481,18 @@ pub fn ocean() -> Theme {
     }
 }
 
-/// `ocean`'s palette painting Apple Terminal.app's Ocean background, so the
-/// look does not depend on the terminal profile being set to match.
+/// `ocean`'s palette painting Apple Terminal.app's Ocean background.
+///
+/// SPEC §5.3, and the one slot that could not simply be inherited:
+/// Terminal.app's bright red measures 1.97:1 on this deep blue — the colour
+/// that means offline, dropped and failed, effectively invisible on the one
+/// theme that paints its own ground. Lightened here to 3.95:1 and left alone
+/// in `sky_palette`, because `ocean` uses the same palette over whatever
+/// ground the terminal already has, where the original reads fine.
 pub fn sky() -> Theme {
     Theme {
         bg: Color::Rgb(0x22, 0x4F, 0xBC),
+        status_error: Color::Rgb(0xFF, 0xAA, 0xA0),
         panel_alt: Color::Rgb(0x1C, 0x42, 0x99),
         terminal_bg: Color::Rgb(0x17, 0x35, 0x7C),
         footer_bg: Color::Rgb(0x1C, 0x42, 0x99),
@@ -774,6 +798,99 @@ mod tests {
         }
     }
 
+    /// Relative luminance, WCAG 2.1.
+    fn luminance(c: Color) -> f64 {
+        let Color::Rgb(r, g, b) = c else {
+            return f64::NAN;
+        };
+        let f = |v: u8| {
+            let v = v as f64 / 255.0;
+            if v <= 0.03928 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
+    }
+
+    fn contrast(fg: Color, bg: Color) -> f64 {
+        let (a, b) = (luminance(fg), luminance(bg));
+        let (hi, lo) = if a > b { (a, b) } else { (b, a) };
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    /// SPEC §5.3, and the check that found two real ones.
+    ///
+    /// A hue chosen to read on a dark ground is chosen for luminance it does
+    /// not have against a light one. `light`'s amber measured 2.79:1 and its
+    /// `absent` grey 1.78:1; `sky`'s red, inherited from Terminal.app, was
+    /// 1.97:1 on its own deep blue. Those are the colours that mean "over
+    /// threshold", "no signal" and "failed", so the three worst places for a
+    /// colour to be invisible.
+    ///
+    /// 3:1 is the WCAG floor for a UI element rather than for body text. It
+    /// is the right bar here: these are glyphs and short labels, not
+    /// paragraphs, and holding a terminal theme to 4.5:1 would rule out most
+    /// of the palettes people actually use.
+    #[test]
+    fn every_theme_that_paints_its_ground_is_legible_on_it() {
+        const FLOOR: f64 = 3.0;
+        for name in THEME_NAMES {
+            let t = by_name(name);
+            // A theme that defers to the terminal cannot be measured: its
+            // ground is whatever the user set, and that is the deal.
+            let Color::Rgb(..) = t.bg else { continue };
+
+            for (slot, colour) in [
+                ("status_good", t.status_good),
+                ("status_warn", t.status_warn),
+                ("status_error", t.status_error),
+                ("status_info", t.status_info),
+                ("brand", t.brand),
+                ("key_hint", t.key_hint),
+                ("text_primary", t.text_primary),
+                ("text_secondary", t.text_secondary),
+                ("text_emphasis", t.text_emphasis),
+                // Deliberately quiet, and still has to be seen: it is the
+                // glyph for a host nobody has heard from.
+                ("absent", t.absent),
+            ] {
+                let ratio = contrast(colour, t.bg);
+                assert!(
+                    ratio >= FLOOR,
+                    "{name}.{slot} is {ratio:.2}:1 against its own background, \
+                     below the {FLOOR}:1 a UI element needs to be seen"
+                );
+            }
+        }
+    }
+
+    /// The four severity colours have to be told apart, not just seen. A
+    /// theme where busy and failed are the same amber says nothing by
+    /// colouring anything.
+    #[test]
+    fn the_severity_colours_are_distinguishable_from_each_other() {
+        for name in THEME_NAMES {
+            let t = by_name(name);
+            let severity = [
+                ("good", t.status_good),
+                ("warn", t.status_warn),
+                ("error", t.status_error),
+                ("absent", t.absent),
+            ];
+            for (i, (a_name, a)) in severity.iter().enumerate() {
+                for (b_name, b) in severity.iter().skip(i + 1) {
+                    assert_ne!(
+                        a, b,
+                        "{name}: `{a_name}` and `{b_name}` are the same colour, \
+                         so the screen cannot tell them apart"
+                    );
+                }
+            }
+        }
+    }
+
     /// `ocean` sits on the terminal's own ground and `sky` paints one. The
     /// pair is otherwise identical, and the three background slots have to
     /// follow that split or `ocean` grows opaque panels over the profile the
@@ -1014,6 +1131,107 @@ mod rendered {
                 leaked.is_empty(),
                 "{name} still paints with the dark palette: {leaked:?}"
             );
+        }
+    }
+
+    /// Every v2 screen, in every theme. Phase 7's gate.
+    ///
+    /// The two checks above render one screen, which is the launcher. That
+    /// was enough when there was one design; it is not enough now that six
+    /// screens draw meters, cards, chips and a floating palette, each with
+    /// its own chance to reach past the theme. "A screenshot per theme per
+    /// screen, reviewed side by side" is the plan's wording, and this is that
+    /// review turned into something that fails a build.
+    #[test]
+    fn every_screen_in_every_theme_paints_only_that_theme() {
+        use crate::design as d;
+        use crate::tui::{AppView, DashboardTab};
+
+        let dark_only = [
+            ("BG", d::BG),
+            ("FG", d::FG),
+            ("DIM", d::DIM),
+            ("FAINT", d::FAINT),
+            ("RULE", d::RULE),
+            ("GREEN", d::GREEN),
+            ("CYAN", d::CYAN),
+            ("AMBER", d::AMBER),
+            ("RED", d::RED),
+            ("VIOLET", d::VIOLET),
+            ("NEVER_DOT", d::NEVER_DOT),
+            ("GREEN_MUTED", d::GREEN_MUTED),
+            ("PANEL_ALT", d::PANEL_ALT),
+            ("TERMINAL_BG", d::TERMINAL_BG),
+            ("METER_TRACK", d::METER_TRACK),
+            ("BORDER_FOCUS", d::BORDER_FOCUS),
+        ];
+
+        let screens: [(&str, AppView, DashboardTab); 5] = [
+            ("launcher", AppView::Launcher, DashboardTab::Sessions),
+            ("sessions", AppView::Dashboard, DashboardTab::Sessions),
+            ("hosts", AppView::Dashboard, DashboardTab::Hosts),
+            ("health", AppView::Dashboard, DashboardTab::Health),
+            ("config", AppView::Dashboard, DashboardTab::Config),
+        ];
+
+        for name in super::THEME_NAMES {
+            if *name == "dark" {
+                continue;
+            }
+            for (screen, view, tab) in screens {
+                let mut app = crate::tui::App::new(4);
+                app.theme = super::by_name(name);
+                app.view = view;
+                app.dashboard_tab = tab;
+                let mut term = Terminal::new(TestBackend::new(150, 34)).unwrap();
+                term.draw(|f| crate::tui::render(f, &mut app)).unwrap();
+
+                let mut leaked: Vec<&str> = Vec::new();
+                for cell in term.backend().buffer().content() {
+                    for (cname, c) in dark_only {
+                        // Backgrounds too: a panel fill that reaches past the
+                        // theme is as wrong as a glyph that does, and harder
+                        // to notice because nothing is written on it.
+                        if (cell.fg == c && !cell.symbol().trim().is_empty() || cell.bg == c)
+                            && !leaked.contains(&cname)
+                        {
+                            leaked.push(cname);
+                        }
+                    }
+                }
+                assert!(
+                    leaked.is_empty(),
+                    "{name} paints the {screen} screen with the dark palette: {leaked:?}"
+                );
+            }
+        }
+    }
+
+    /// The same sweep for `terminal`, whose promise is that it pins nothing.
+    #[test]
+    fn no_screen_under_the_terminal_theme_emits_rgb() {
+        use crate::tui::{AppView, DashboardTab};
+        for (view, tab) in [
+            (AppView::Launcher, DashboardTab::Sessions),
+            (AppView::Dashboard, DashboardTab::Sessions),
+            (AppView::Dashboard, DashboardTab::Hosts),
+            (AppView::Dashboard, DashboardTab::Health),
+            (AppView::Dashboard, DashboardTab::Config),
+        ] {
+            let mut app = crate::tui::App::new(4);
+            app.theme = super::terminal();
+            app.view = view;
+            app.dashboard_tab = tab;
+            let mut term = Terminal::new(TestBackend::new(150, 34)).unwrap();
+            term.draw(|f| crate::tui::render(f, &mut app)).unwrap();
+            for cell in term.backend().buffer().content() {
+                assert!(
+                    !matches!(cell.fg, Color::Rgb(..)) && !matches!(cell.bg, Color::Rgb(..)),
+                    "terminal theme emitted {:?}/{:?} on {tab:?}",
+                    cell.fg,
+                    cell.bg
+                );
+            }
         }
     }
 

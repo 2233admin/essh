@@ -48,9 +48,14 @@ pub const VIOLET: Color = Color::Rgb(0xb8, 0xa8, 0xe8);
 /// numerals). Distinct from `FG`, which is body text.
 pub const WHITE: Color = Color::Rgb(0xff, 0xff, 0xff);
 
-/// The dot used for a host that has never been probed. Deliberately not grey
-/// text — it is a colour that reads as "no signal", not as "bad".
-pub const NEVER_DOT: Color = Color::Rgb(0x33, 0x45, 0x4d);
+/// The dot for a host with no signal: never probed, or offline.
+///
+/// Deliberately not grey text — it reads as "no signal", not as "bad". It was
+/// `#33454d`, which measured 1.86:1 against the panel ground and was
+/// therefore quiet to the point of absent, on the one glyph whose whole job
+/// is to be noticed as *missing*. `#556a74` is 3.28:1: still the quietest
+/// thing on the row, and now visible.
+pub const NEVER_DOT: Color = Color::Rgb(0x55, 0x6a, 0x74);
 
 /// Selection tint for the current row, `rgba(95,220,255,.05)` composited on
 /// the background. Terminals have no alpha, so it is pre-mixed.
