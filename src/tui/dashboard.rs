@@ -354,8 +354,13 @@ impl HostCols {
         let fixed = |c: &HostCols| {
             1 + c.name + c.address + c.sess + c.cpu + c.mem + c.disk + c.rtt + c.spark
         };
+        // One gap before every column after the state glyph, TAGS included.
+        // Counting seven of them and forgetting the eighth is how the header
+        // came out four cells wider than the panel it sits in, which pushes
+        // the last column off the right edge and looks like a table that
+        // "just does not fit" rather than like arithmetic.
         let gaps = |c: &HostCols| {
-            GAP * (1 + [c.address, c.sess, c.cpu, c.mem, c.disk, c.rtt, c.spark]
+            GAP * (2 + [c.address, c.sess, c.cpu, c.mem, c.disk, c.rtt, c.spark]
                 .iter()
                 .filter(|w| **w > 0)
                 .count())
@@ -386,18 +391,21 @@ impl HostCols {
     }
 
     fn header(&self, t: &Theme) -> Vec<Span<'static>> {
-        let mut out = vec![Span::raw(" ".repeat(1 + GAP))];
+        let mut out = vec![Span::raw(" ")];
+        // The gap goes *before* each column, matching `row`. Trailing it
+        // instead adds one the budget did not allow for, at the one edge
+        // where nothing follows to make it visible.
         let mut push = |label: &str, w: usize, right: bool| {
             if w == 0 {
                 return;
             }
+            out.push(Span::raw(" ".repeat(GAP)));
             let cell = if right {
                 d::fit_right(label, w, Style::default().fg(t.text_muted))
             } else {
                 d::fit_left(label, w, Style::default().fg(t.text_muted))
             };
             out.extend(cell);
-            out.push(Span::raw(" ".repeat(GAP)));
         };
         push("NAME", self.name, false);
         push("ADDRESS", self.address, false);
@@ -1453,4 +1461,222 @@ pub fn render_add_host_dialog(
             .border_style(Style::default().fg(theme.border).bg(theme.selection_bg)),
     );
     f.render_widget(paragraph, inner);
+}
+
+#[cfg(test)]
+mod hosts_tests {
+    use super::*;
+    use crate::tui::{HostState, HostStatus, HostVitals};
+
+    fn host(name: &str, status: HostStatus) -> super::super::HostDisplay {
+        super::super::HostDisplay {
+            name: name.into(),
+            hostname: "127.0.0.20".into(),
+            port: 2222,
+            user: "matt".into(),
+            status,
+            last_seen: String::new(),
+            tags: String::new(),
+            tag_pairs: vec![("env".into(), "prod".into())],
+            latency_ms: None,
+            latency_history: Vec::new(),
+            jump_host: None,
+            diverge_count: None,
+            vitals: HostVitals::default(),
+            session_count: 0,
+        }
+    }
+
+    /// SPEC §3.2. The handoff's own explanation is 65 cells inside a 64-cell
+    /// span, and hand-trimming it only moves the problem to the next width.
+    /// So the assertion is about the floor, not the string: whatever else is
+    /// dropped, the row says what happened and which key fixes it.
+    #[test]
+    fn an_unreachable_row_always_states_its_recovery_key() {
+        let mut dropped = host("edge-01", HostStatus::Dropped);
+        dropped.last_seen = "2026-09-04T11:00:00Z".into();
+        dropped.vitals.cpu_pct = Some(9.0);
+        dropped.vitals.mem_pct = Some(41.0);
+        let offline = host("staging-web-01", HostStatus::Offline);
+
+        for h in [&dropped, &offline] {
+            let key = h.state().recovery().expect("a recovery key");
+            // Every width from the floor up to a full-width span, so this
+            // holds at the terminal sizes `render_smoke` sweeps rather than
+            // at the one the reference was drawn at.
+            for budget in 20..=90 {
+                let reason = unreachable_reason(h, budget);
+                assert!(
+                    reason.contains(key),
+                    "{} at {budget} cells dropped its recovery key: {reason:?}",
+                    h.name
+                );
+                assert!(
+                    reason.starts_with("connection reset") || reason.starts_with("offline"),
+                    "{} at {budget} cells does not say what happened: {reason:?}",
+                    h.name
+                );
+            }
+        }
+    }
+
+    /// A host that never answered has no last reading, so it must not carry
+    /// one. Inventing `last cpu 0%` for it is the defect SPEC §1 exists to
+    /// stop, in the one place where a plausible-looking number is easiest to
+    /// reach for.
+    #[test]
+    fn a_host_that_never_answered_reports_no_last_reading() {
+        let mut offline = host("staging-web-01", HostStatus::Offline);
+        offline.vitals.cpu_pct = Some(0.0);
+        offline.vitals.mem_pct = Some(0.0);
+        let reason = unreachable_reason(&offline, 90);
+        assert!(!reason.contains("last cpu"), "{reason:?}");
+    }
+
+    /// SPEC §3.2's budget, and the reason it is written down: CPU at the
+    /// handoff's `8ch` leaves three cells for the meter after the
+    /// percentage, and three cells cannot express a ramp.
+    #[test]
+    fn the_hosts_budget_leaves_a_meter_worth_drawing() {
+        let cols = HostCols::fit(146);
+        assert_eq!((cols.cpu, cols.mem, cols.disk), (12, 13, 13));
+        for w in [cols.cpu, cols.mem, cols.disk] {
+            assert!(
+                w.saturating_sub(5) >= 7,
+                "a {w}-cell column leaves {} cells of meter",
+                w.saturating_sub(5)
+            );
+        }
+        assert!(cols.name >= 14, "`staging-web-01` does not fit NAME");
+        assert!(cols.tags > 0, "TAGS took no width at all");
+    }
+
+    /// Every row is exactly as wide as the panel, at every width the smoke
+    /// tests sweep. A row one cell over its budget pushes the column after it
+    /// off the screen, and the table looks fine until the one host with a
+    /// long name arrives.
+    #[test]
+    fn every_row_fills_its_width_exactly() {
+        let t = crate::theme::dark();
+        let hosts = [
+            {
+                let mut h = host("web-01", HostStatus::Online);
+                h.vitals.cpu_pct = Some(12.0);
+                h.vitals.mem_pct = Some(46.0);
+                h.vitals.disk_pct = Some(81.0);
+                h.latency_ms = Some(0.4);
+                h.latency_history = vec![1, 2, 3, 2, 1];
+                h
+            },
+            host("staging-web-01", HostStatus::Offline),
+            host("edge-01", HostStatus::Dropped),
+            host("brand-new-host", HostStatus::NeverProbed),
+        ];
+
+        for width in [60usize, 80, 100, 146, 200] {
+            let cols = HostCols::fit(width);
+            let header: String = cols.header(&t).iter().map(|s| s.content.as_ref()).collect();
+            assert!(
+                d::width_of(&header) <= width,
+                "the header is {} cells at width {width}",
+                d::width_of(&header)
+            );
+            for h in &hosts {
+                for selected in [false, true] {
+                    let row: String = cols
+                        .row(h, selected, &t)
+                        .iter()
+                        .map(|s| s.content.as_ref())
+                        .collect();
+                    assert!(
+                        d::width_of(&row) <= width,
+                        "{} is {} cells at width {width}: {row:?}",
+                        h.name,
+                        d::width_of(&row)
+                    );
+                }
+            }
+        }
+    }
+
+    /// Defect 7 of the v0.3.3 list: eleven of fifteen process rows were
+    /// identical nginx workers, so the panel spent its height saying one
+    /// thing eleven times.
+    #[test]
+    fn identical_siblings_collapse_with_their_count() {
+        let mut h = host("web-02", HostStatus::Online);
+        h.status = HostStatus::Online;
+        h.vitals.processes = (0..6)
+            .map(|i| crate::monitor::ProcessInfo {
+                pid: 100 + i,
+                name: "nginx: worker process".into(),
+                cpu_pct: 0.5,
+                mem_pct: 0.1,
+                mem_rss_kb: 3000,
+                state: "S".into(),
+            })
+            .collect();
+        h.vitals.processes.push(crate::monitor::ProcessInfo {
+            pid: 99,
+            name: "nginx: master process".into(),
+            cpu_pct: 3.1,
+            mem_pct: 0.1,
+            mem_rss_kb: 1700,
+            state: "S".into(),
+        });
+
+        let rows = busiest(&[h]);
+        assert_eq!(rows.len(), 2, "siblings did not collapse: {rows:?}");
+        let workers = rows
+            .iter()
+            .find(|r| r.name.contains("worker"))
+            .expect("the worker row");
+        assert_eq!(workers.siblings, 6);
+        assert_eq!(workers.rss_kb, 18_000, "RSS is not summed");
+        assert!((workers.cpu_pct - 3.0).abs() < 0.001, "CPU is not summed");
+        assert!(workers.label(40).ends_with("×6"), "{:?}", workers.label(40));
+        // The count survives a column too narrow for the name, because it is
+        // reserved before the name is cut.
+        assert!(workers.label(12).ends_with("×6"), "{:?}", workers.label(12));
+        assert!(d::width_of(&workers.label(12)) <= 12);
+    }
+
+    /// An unreachable host's last process list is a snapshot of what *was*
+    /// running. "Busiest right now" is a claim about now.
+    #[test]
+    fn an_unreachable_host_is_left_out_of_busiest() {
+        let mut gone = host("edge-01", HostStatus::Dropped);
+        gone.vitals.processes = vec![crate::monitor::ProcessInfo {
+            pid: 1,
+            name: "was-running".into(),
+            cpu_pct: 99.0,
+            mem_pct: 1.0,
+            mem_rss_kb: 1000,
+            state: "R".into(),
+        }];
+        assert!(busiest(&[gone]).is_empty());
+    }
+
+    /// SPEC §1 rule 3's whole point: a busy host with a named cause is not an
+    /// incident, so the row has to carry the cause.
+    #[test]
+    fn an_attention_row_names_the_process_responsible() {
+        let mut busy = host("build-01", HostStatus::Online);
+        busy.vitals.cpu_pct = Some(94.0);
+        busy.vitals.cpu_over_since =
+            std::time::Instant::now().checked_sub(std::time::Duration::from_secs(300));
+        busy.vitals.processes = vec![crate::monitor::ProcessInfo {
+            pid: 1,
+            name: "rustc".into(),
+            cpu_pct: 88.2,
+            mem_pct: 4.0,
+            mem_rss_kb: 2_100_000,
+            state: "R".into(),
+        }];
+        assert_eq!(busy.state(), HostState::Busy);
+        let (verdict, why) = attention_wording(&busy);
+        assert_eq!(verdict, "cpu 94%");
+        assert!(why.contains("rustc"), "no cause named: {why:?}");
+        assert!(why.contains("over 90%"), "no threshold named: {why:?}");
+    }
 }
