@@ -32,6 +32,14 @@ pub struct Theme {
     pub status_info: Color,
 
     // Data
+    /// The two network rates want two colours; the names say which is which
+    /// and every call site disagrees with them. `tx_rate` paints the *download*
+    /// figure and its sparkline, in the session status bar and in both of the
+    /// host monitor's network boxes; `rx_rate` paints the upload arrow. They
+    /// agree with each other, which is what a reader sees, so this is a
+    /// misnaming and not a swap — do not "fix" a call site to match the name
+    /// without changing all of them, or ↓ turns green on one screen and stays
+    /// blue on the next. The slot names are fixed by SPEC §5.
     pub rx_rate: Color,
     pub tx_rate: Color,
     pub key_hint: Color,

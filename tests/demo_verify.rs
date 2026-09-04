@@ -672,6 +672,33 @@ fn the_demo_beats_match_the_spec() {
     let fwd_empty = tui.frame("11 · forwards, empty");
     universal_rules(&fwd_empty, "forwards");
 
+    // The status line under a session, on a session that has been open for a
+    // minute. It read `link quality unmeasured — waiting for the first
+    // keepalive` for the whole life of the feature, because nothing ever sent
+    // one: `record_rtt` had no callers. A line that names something as coming
+    // and never delivers it is worse than a line that says nothing, because
+    // the reader waits. `diagnostics::keepalive` sends the ping now.
+    assert!(
+        !fwd_empty.contains("waiting for the first keepalive"),
+        "the link line is still waiting for a keepalive nobody sends:\n{fwd_empty}"
+    );
+    assert!(
+        fwd_empty.contains("rtt ") && fwd_empty.contains("loss "),
+        "the session reports no round trip:\n{fwd_empty}"
+    );
+    // A number, not a placeholder. `rtt —` beside a confident `●excellent` is
+    // the shape this replaced.
+    let rtt = fwd_empty
+        .split("rtt ")
+        .nth(1)
+        .and_then(|t| t.split("ms").next())
+        .and_then(|t| t.trim().parse::<f64>().ok())
+        .expect("an RTT that parses as a number");
+    assert!(
+        rtt > 0.0 && rtt < 1000.0,
+        "a container on loopback reported {rtt}ms"
+    );
+
     tui.type_text("a");
     tui.settle(600);
     let form = tui.frame("11b · add form");

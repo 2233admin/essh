@@ -1607,6 +1607,12 @@ fn render_busiest(f: &mut Frame, area: Rect, hosts: &[super::HostDisplay], theme
 
     let all = busiest(hosts);
 
+    // "Busiest" has to mean something is running. `ps` reports %CPU to one
+    // decimal, so an idle fleet returns a page of processes at 0.0 that the
+    // sort then ranks by name — which reads as twelve busy things when the
+    // truth is none of them. Show what is moving; count the rest.
+    let active_n = all.iter().filter(|p| p.proc.cpu_pct >= BUSY_FLOOR).count();
+
     // SPEC §3.3: HOST 14, CPU 5, RSS 7. `16.8 MB` is seven characters, which
     // is what the handoff's six would have clipped.
     const HOST: usize = 14;
@@ -1637,10 +1643,28 @@ fn render_busiest(f: &mut Frame, area: Rect, hosts: &[super::HostDisplay], theme
         h
     })];
 
+    // One line for the header, and one held back for the tail count when there
+    // is a tail to report — a note that scrolls off says nothing.
+    let body = inner.height.saturating_sub(1) as usize;
+    let shown = if active_n < all.len() || active_n > body {
+        body.saturating_sub(1)
+    } else {
+        body
+    }
+    .min(active_n);
+
     if all.is_empty() {
         lines.push(d::none_line("no process readings yet", theme));
+    } else if active_n == 0 {
+        // The count belongs on this line rather than in a tail note below it:
+        // two lines to say "nothing, out of eighteen" wastes a row on a panel
+        // that has none spare, and reads as though the eighteen are elsewhere.
+        lines.push(d::none_line(
+            &format!("nothing above 0.1% cpu, of {} processes", all.len()),
+            theme,
+        ));
     }
-    for p in all.iter().take(inner.height.saturating_sub(1) as usize) {
+    for p in all.iter().take(shown) {
         let mut row = d::fit_left(&p.host, HOST, Style::default().fg(theme.text_secondary));
         row.push(Span::raw(" ".repeat(GAP)));
         row.extend(d::fit_left(
@@ -1662,7 +1686,34 @@ fn render_busiest(f: &mut Frame, area: Rect, hosts: &[super::HostDisplay], theme
         ));
         lines.push(Line::from(row));
     }
+    if let Some(note) = tail_note(all.len() - shown, all.len() - active_n).filter(|_| active_n > 0)
+    {
+        lines.push(Line::from(Span::styled(
+            note,
+            Style::default().fg(theme.text_muted),
+        )));
+    }
     f.render_widget(Paragraph::new(lines), inner);
+}
+
+/// The cutoff below which a process is not "busy".
+///
+/// `ps` gives one decimal, so this is the smallest reading that is not zero.
+const BUSY_FLOOR: f64 = 0.1;
+
+/// What the list left out, or `None` when it left out nothing.
+///
+/// A top-N list must not look complete when it is not, and the two reasons a
+/// row is missing are different: one is idle, the other did not fit. When both
+/// apply, say so, because "18 more" over a panel showing 296% invites the
+/// reader to assume eighteen more like it.
+fn tail_note(hidden: usize, idle: usize) -> Option<String> {
+    match (hidden, idle) {
+        (0, _) => None,
+        (h, 0) => Some(format!("{h} more")),
+        (h, i) if h == i => Some(format!("{h} more below 0.1%")),
+        (h, i) => Some(format!("{h} more, {i} of them below 0.1%")),
+    }
 }
 
 /// Panel 3 — reachability, one row per host.
@@ -2105,6 +2156,34 @@ pub fn render_add_host_dialog(
 mod hosts_tests {
     use super::*;
     use crate::tui::{HostState, HostStatus, HostVitals};
+
+    /// A panel that shows two busy processes and hides sixteen idle ones must
+    /// say so. It must not say "16 more" over a row reading 296%, which invites
+    /// the reader to assume sixteen more like it.
+    #[test]
+    fn the_tail_note_separates_idle_from_clipped() {
+        assert_eq!(tail_note(0, 0), None);
+        assert_eq!(tail_note(0, 4), None, "nothing hidden, nothing said");
+        assert_eq!(tail_note(16, 16).unwrap(), "16 more below 0.1%");
+        assert_eq!(tail_note(3, 0).unwrap(), "3 more");
+        assert_eq!(tail_note(9, 6).unwrap(), "9 more, 6 of them below 0.1%");
+    }
+
+    /// The floor is the smallest reading `ps` can report that is not zero. Set
+    /// it higher and a shell doing real work at 0.4% disappears; set it to zero
+    /// and the panel is a page of processes tied at nothing.
+    #[test]
+    fn the_busy_floor_keeps_the_smallest_non_zero_ps_reading() {
+        // A real sweep of the fixture fleet: one load generator, one checksum
+        // run, a shell that is doing something, and forty-odd idle sshd rows.
+        let readings = [296.8_f64, 6.0, 0.4, 0.1, 0.0, 0.0];
+        let kept: Vec<f64> = readings
+            .iter()
+            .copied()
+            .filter(|c| *c >= BUSY_FLOOR)
+            .collect();
+        assert_eq!(kept, vec![296.8, 6.0, 0.4, 0.1]);
+    }
 
     fn host(name: &str, status: HostStatus) -> super::super::HostDisplay {
         super::super::HostDisplay {

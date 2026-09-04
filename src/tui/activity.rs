@@ -1,4 +1,4 @@
-//! What changed, and when. SPEC §6.6.
+//! What changed, and when. SPEC §6.7.
 //!
 //! The activity panel needs an event log, and essh had none: every screen
 //! showed the current state and nothing showed how it got there. "build-01

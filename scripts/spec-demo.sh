@@ -100,11 +100,19 @@ sed -e "s#@HOME@#$DEMO_HOME#g" -e "s#@OUT@#$SCRATCH/demo.gif#g" \
 # gifsicle is not always present; ffmpeg's palettegen produces a smaller file
 # with better colour on terminal captures anyway, because a TUI uses few
 # colours and a generated palette spends all 256 on the ones in the frame.
+#
+# 64 colours, not 128. A theme is 27 named slots; what needs more than that is
+# the font's antialiasing, and halving the palette costs 1.2 average RGB units
+# per pixel on the busiest frame while taking 18% off the file. No dithering
+# either: dithering trades banding for noise, a terminal has no gradients to
+# band, and the noise is what a GIF cannot compress. `diff_mode=rectangle`
+# limits each frame to the box that changed, which is most of the win on a
+# capture where one panel updates and the other three do not.
 if command -v gifsicle >/dev/null; then
-  gifsicle -O3 --lossy=40 --colors 128 "$SCRATCH/demo.gif" -o "$OUT"
+  gifsicle -O3 --lossy=40 --colors 64 "$SCRATCH/demo.gif" -o "$OUT"
 else
   ffmpeg -y -loglevel error -i "$SCRATCH/demo.gif" \
-    -vf "split[a][b];[a]palettegen=max_colors=128:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4" \
+    -vf "split[a][b];[a]palettegen=max_colors=64:stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle" \
     "$OUT"
 fi
 

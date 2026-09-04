@@ -1,4 +1,4 @@
-//! One command, many hosts. SPEC §6.5.
+//! One command, many hosts. SPEC §6.6.
 //!
 //! v2 makes this the only multi-host *action* on the dashboard, in place of
 //! everything the fleet-consensus screen used to be. The argument is a good

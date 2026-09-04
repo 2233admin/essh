@@ -132,9 +132,9 @@ The landing screen, and the one v2 promotes to primary.
 3. Quick connect, with the focus model of SPEC §4.1. `Tab` cycles panels,
    `border_focus` shows which, digits fire only while focused.
 4. Activity ring buffer from state transitions the app already computes.
-   SPEC §6.6.
+   SPEC §6.7.
 5. Broadcast panel over the `essh run` fan-out, streaming exit code and
-   duration without blocking the frame. SPEC §6.5.
+   duration without blocking the frame. SPEC §6.6.
 
 Steps 4 and 5 are independent of 1 to 3 and of each other.
 

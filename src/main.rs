@@ -86,7 +86,7 @@ struct TuiState {
     fleet_sampler: fleet::sampler::FleetSampler,
     fleet_pool: fleet::pool::FleetPool,
     fleet_sample_task: Option<FleetSampleTask>,
-    /// Per-host broadcast replies, drained each tick. SPEC §6.5.
+    /// Per-host broadcast replies, drained each tick. SPEC §6.6.
     broadcast_rx: Option<tokio::sync::mpsc::Receiver<(String, tui::broadcast::Reply)>>,
     /// Facet sweeps in flight, by host name, so one is not started again
     /// underneath itself.
@@ -755,6 +755,7 @@ async fn connect_and_shell(
         Some(format!("{:?}", connect_config.auth)),
     )
     .await;
+    diagnostics::keepalive::spawn(&session.handle, &diag);
 
     let (cols, rows) = terminal::size()?;
     let channel = session
@@ -4204,6 +4205,7 @@ async fn open_session_inner(
                 Some(format!("{:?}", connect_config.auth)),
             )
             .await;
+            diagnostics::keepalive::spawn(&ssh_session.handle, &diag);
 
             // Open shell channel
             let (cols, rows) = terminal::size()?;
@@ -4500,6 +4502,7 @@ async fn reconnect_session(
         Some(format!("{:?}", connect_config.auth)),
     )
     .await;
+    diagnostics::keepalive::spawn(&ssh_session.handle, &diag);
 
     // Open shell channel
     let (cols, rows) = terminal::size()?;
@@ -5444,7 +5447,7 @@ async fn health_check(config: &AppConfig, group: Option<&str>) -> anyhow::Result
     Ok(())
 }
 
-/// The broadcast panel's keys. SPEC §6.5.
+/// The broadcast panel's keys. SPEC §6.6.
 ///
 /// `None` means the key was not ours and the shared dashboard bindings should
 /// see it. Returning `Handled` for everything while editing is what stops `q`

@@ -422,7 +422,7 @@ pub struct App {
     pub selected_session: usize,
     /// Which panel of the sessions screen takes keys. SPEC §4.1.
     pub sessions_panel: SessionsPanel,
-    /// What changed, and when. SPEC §6.6.
+    /// What changed, and when. SPEC §6.7.
     pub activity: activity::ActivityLog,
     /// The broadcast panel's target, command and per-host results.
     pub broadcast: broadcast::Broadcast,
@@ -2171,6 +2171,64 @@ mod consistency {
                     s.contains(key),
                     "{tab:?} does not advertise `{key}`, which is bound everywhere:\n{s}"
                 );
+            }
+        }
+    }
+
+    /// One reading, one spelling.
+    ///
+    /// `rtt`, `loss` and the two rate arrows are drawn by two renderers in the
+    /// same place on screen — the session status bar and the mini strip — and
+    /// they disagreed: `RTT:0.6ms  ↑22 B/s  Loss:0.0%` against
+    /// `rtt 0.6ms  ↓ 22 B/s  loss 0.0%`. Same number, same row, two house
+    /// styles, one of them v1's. A reader who notices the difference will look
+    /// for a meaning in it.
+    #[test]
+    fn the_link_metrics_are_spelled_the_same_by_both_renderers() {
+        let strip = include_str!("hud.rs");
+        let bar = include_str!("session_view.rs");
+
+        // Comments in both files quote the old spelling to explain it, so look
+        // only at what is handed to a Span.
+        let painted = |src: &str| -> Vec<String> {
+            src.lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .flat_map(|l| l.match_indices('"').map(|_| ()).enumerate().map(move |_| l))
+                .flat_map(|l| {
+                    l.split('"')
+                        .skip(1)
+                        .step_by(2)
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .collect()
+        };
+
+        for (name, src) in [("mini strip", strip), ("status bar", bar)] {
+            let lits = painted(src);
+            assert!(
+                lits.iter().any(|l| l == "rtt "),
+                "{name} does not label the round trip `rtt `"
+            );
+            assert!(
+                lits.iter().any(|l| l == "loss "),
+                "{name} does not label loss `loss `"
+            );
+            assert!(
+                !lits.iter().any(|l| l.starts_with("RTT:") || l == "Loss:"),
+                "{name} still uses v1's capitalised labels"
+            );
+            // An arrow carries its own trailing space so the number never
+            // touches it.
+            for arrow in ["↑", "↓"] {
+                if lits.iter().any(|l| l.starts_with(arrow)) {
+                    assert!(
+                        lits.iter()
+                            .filter(|l| l.starts_with(arrow))
+                            .all(|l| l == &format!("{arrow} ")),
+                        "{name} draws {arrow} without its trailing space"
+                    );
+                }
             }
         }
     }

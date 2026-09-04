@@ -36,7 +36,7 @@ Sixteen findings, each with the correction this document adopts. Numbers 1, 3,
 | 15 | Session HOST `13ch`, attention host `12ch`, busiest RSS `6ch` | 15 / 15 / 7 | `staging-web-01` is 14 characters and `16.8 MB` is 7 |
 | 16 | Add-forward row offers `R HOST:PORT → 127.0.0.1:PORT` | `L` form only | Remote forwards are not implemented and phase 0 refuses `R` with a reason. Advertising them is defect 2 of the original seven, rebuilt |
 
-Five more found while building it, in §0.1.
+Nine more found while building it, in §0.1.
 
 Two that are not defects in the design but change what the work is:
 
@@ -57,6 +57,10 @@ it, which is a different reading and finds different things.
 | 19 | v1's screen 3 listed only outliers, so arriving there snapped the cursor onto a host you had not selected, and `Down` walked rows the hosts screen did not draw | One order for both tabs. v2's health screen lists every host, so the second order is removed rather than reconciled |
 | 20 | A single health card stretched across 146 cells puts its label at one edge and its value at the other | Cards keep a fixed 38-cell width whether there is one or four |
 | 21 | A collapsed `×N` row truncates its own count off the end of a long command, turning a summed 296% back into what reads as one process | The `×N` is reserved before the name is cut |
+| 22 | "busiest right now" ranked by CPU with no floor, so an idle fleet filled the panel with a dozen processes reading `0.0` — ten rows of sshd bookkeeping, sorted by a tie. A panel titled "busiest" that lists nothing busy is answering a question nobody asked | Rows below 0.1% (the smallest reading `ps` gives that is not zero) are counted, not listed: `41 more below 0.1%`. The tail is still real, and still says so |
+| 23 | `link quality unmeasured — waiting for the first keepalive` under every session, forever. `record_rtt`, `record_keepalive_sent` and `record_keepalive_received` were all `#[allow(dead_code)]` and none had a caller — nothing ever sent a keepalive. Naming a measurement as pending and never making it is worse than showing nothing, because the reader waits | `diagnostics::keepalive` pings on the connection's own `Arc<Handle>` via `send_ping`, which takes `&self`. §6.5 |
+| 24 | `throughput ↑/↓` was `bytes / uptime`: a lifetime average printed as a live rate, beside an RTT that is instantaneous | A window closed on each keepalive tick, so both numbers on the line are measured the same way. §6.5 |
+| 25 | The session status bar wrote `RTT:0.6ms  ↑22 B/s  Loss:0.0%`; the mini strip drew the same four numbers in the same row as `rtt 0.6ms  ↓ 22 B/s  loss 0.0%`. v1 house style outliving v1, in the one place both spellings are visible in a single session | Lowercase labels and a spaced arrow in both, held by `consistency::the_link_metrics_are_spelled_the_same_by_both_renderers` |
 
 And one revision to §8 below, made deliberately rather than found: `D` stays.
 
@@ -689,14 +693,64 @@ bound, one layer further away.
 the channel comes back, the bytes arrive, the connection is counted, and
 cancelling stops the server listening.
 
-### 6.5 Broadcast
+### 6.5 Link quality, which was never measured
+
+The status line under a session promised a number and never produced one:
+
+```
+link quality unmeasured — waiting for the first keepalive
+```
+
+That line is correct about what it is waiting for. Nothing was coming.
+`DiagnosticsEngine` shipped with `record_rtt`, `record_keepalive_sent` and
+`record_keepalive_received`, all three `#[allow(dead_code)]`, none of them
+called from anywhere. So `rtt_ms` stayed `None`, and the branch that renders
+throughput, loss and the quality verdict was unreachable for the life of every
+session.
+
+This is a worse failure than showing nothing. A blank tells a reader the
+feature is absent; a line that names a measurement as pending tells them to
+wait for it.
+
+`russh::client::Handle::send_ping` sends a global request and awaits the reply.
+It takes `&self`, so it works through the `Arc<Handle>` the session already
+holds — no lock, no second connection, none of what §6.4 needed. Three
+constraints on the loop:
+
+* **Bounded.** A ping that never returns must not wedge the task. Ten seconds,
+  and a timeout counts as loss rather than as a very slow reading — `10000ms`
+  would grade a dead link as Critical instead of as the disconnection it is.
+* **Weak.** The task holds `Weak<Handle>`, not `Arc`. A strong reference would
+  keep the connection open for as long as the task ran, and the task runs
+  until the connection closes.
+* **Settled.** The first ping goes out while the handshake is still finishing
+  and reads about seventy times the steady state — 47ms against 0.6ms to a
+  container on loopback, enough to grade an Excellent link as Good. It is
+  still published immediately, because fifteen seconds of "unmeasured" is the
+  thing being fixed. It is corrected one second later, then every fifteen.
+
+A slow pong on a session whose shell is flooding is not a distortion to
+correct. russh answers on the task that pumps channel data, so a congested
+connection reports a longer round trip, which is what link quality is for.
+
+The same tick closes the throughput window, because the two numbers sit on one
+line and must be measured alike. `throughput_up_bps` was `bytes_sent / uptime`,
+which is a lifetime average and not a rate: a session that pulled 10MB in its
+first second and idled for an hour reported 2.8KB/s, steadily, forever. That is
+the mistake `ps` makes with `%CPU` — the one §0.1 finding 21 and the RUNNING
+column already dealt with once — and it was sitting beside an RTT that is
+instantaneous, so the two read as though they were the same kind of
+measurement. `roll_rates` reports the bytes moved since the last ping over the
+time since the last ping.
+
+### 6.6 Broadcast
 
 `essh run <tag> -- <cmd>` already fans out over one-shot connections and prints
 per-host output. The broadcast panel needs the same fan-out reporting exit code
 and duration per host into the UI instead of stdout, without blocking the
 frame. The CLI path is the model; the streaming is new.
 
-### 6.6 Activity
+### 6.7 Activity
 
 The activity panel needs an event log, which does not exist. Entries come from
 state transitions the app already computes: a session's state changing, a host

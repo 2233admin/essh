@@ -157,7 +157,7 @@ Sleep 400ms
 Type "uptime"
 Sleep 800ms
 Enter
-Sleep 3500ms
+Sleep 3s
 
 # Focus is sticky, so there has to be a way back to the table. Without one,
 # Enter here sends another broadcast rather than attaching.
@@ -197,9 +197,9 @@ Sleep 2500ms
 # facet grid. It is now the attention list, the cards, the busiest processes
 # across the whole fleet, and reachability.
 Type "3"
-Sleep 4500ms
+Sleep 4s
 Down
-Sleep 1200ms
+Sleep 1000ms
 
 # ── 12 · the drill-down is still there, behind a key ───────────────────
 # Configuration divergence leaves the default dashboard and keeps its modal.
@@ -207,7 +207,7 @@ Sleep 1200ms
 Type "2"
 Sleep 900ms
 Type "D"
-Sleep 4s
+Sleep 3500ms
 Escape
 Sleep 800ms
 
@@ -219,7 +219,12 @@ Sleep 800ms
 Type "1"
 Sleep 700ms
 Enter
-Sleep 2s
+Sleep 1500ms
+# A clean pane behind the overlay. The banner is real and was worth showing
+# once; five frames of it behind the panel that is the actual subject is not.
+Type "clear"
+Enter
+Sleep 600ms
 Ctrl+A
 Sleep 300ms
 Type "p"
@@ -227,21 +232,21 @@ Sleep 1200ms
 Type "a"
 Sleep 600ms
 Type "L:18080:localhost:80"
+Sleep 500ms
+Enter
+Sleep 2200ms
+Type "a"
 Sleep 600ms
+Type "L:18080:localhost:80"
+Sleep 500ms
 Enter
 Sleep 2500ms
 Type "a"
 Sleep 600ms
-Type "L:18080:localhost:80"
-Sleep 600ms
-Enter
-Sleep 3s
-Type "a"
-Sleep 600ms
 Type "R:19090:127.0.0.1:22"
-Sleep 600ms
+Sleep 500ms
 Enter
-Sleep 3s
+Sleep 2800ms
 Escape
 Sleep 800ms
 
@@ -261,7 +266,7 @@ Sleep 4500ms
 Ctrl+P
 Sleep 900ms
 Type "db"
-Sleep 3s
+Sleep 2800ms
 Escape
 Sleep 600ms
 

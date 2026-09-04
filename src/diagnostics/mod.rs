@@ -1,3 +1,5 @@
+pub mod keepalive;
+
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -27,6 +29,11 @@ pub struct SessionMetrics {
     pub channels_active: u32,
     pub last_rekey_at: Option<DateTime<Utc>>,
     pub bytes_since_rekey: u64,
+    /// Byte counts and the clock at the last rate mark. See `roll_rates`.
+    pub rate_mark: (u64, u64, DateTime<Utc>),
+    /// Bytes per second over the last marked window, not over the session.
+    pub rate_up_bps: f64,
+    pub rate_down_bps: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -53,6 +60,11 @@ pub struct DiagnosticsSnapshot {
     pub channels_active: u32,
 }
 
+/// Clone shares the metrics rather than copying them: the `Arc<RwLock<_>>` is
+/// the point, and `metrics()` already hands that same handle out. A clone
+/// writes to the same log file, which is what a second writer on one session
+/// should do.
+#[derive(Clone)]
 pub struct DiagnosticsEngine {
     metrics: Arc<RwLock<SessionMetrics>>,
     log_file: Option<PathBuf>,
@@ -79,6 +91,9 @@ impl SessionMetrics {
             channels_active: 0,
             last_rekey_at: None,
             bytes_since_rekey: 0,
+            rate_mark: (0, 0, Utc::now()),
+            rate_up_bps: 0.0,
+            rate_down_bps: 0.0,
         }
     }
 
@@ -111,12 +126,24 @@ impl SessionMetrics {
         }
     }
 
-    pub fn throughput_up_bps(&self, elapsed_secs: f64) -> f64 {
-        self.bytes_sent as f64 / elapsed_secs
-    }
-
-    pub fn throughput_down_bps(&self, elapsed_secs: f64) -> f64 {
-        self.bytes_received as f64 / elapsed_secs
+    /// Close the current rate window and open a new one.
+    ///
+    /// `bytes_sent / uptime` is a lifetime average, and a lifetime average is
+    /// not a rate. A session that pulled 10MB in its first second and has been
+    /// idle for an hour reports 2.8KB/s, steadily, forever — the same mistake
+    /// `ps` makes with `%CPU`, and it sits on the same line as an RTT that
+    /// *is* instantaneous, so the two read as if they were measured alike.
+    ///
+    /// The keepalive calls this, which sets the window: one second for the
+    /// first, then fifteen. Coarse, but it is a rate.
+    pub fn roll_rates(&mut self) {
+        let (sent, received, at) = self.rate_mark;
+        let secs = (Utc::now() - at).num_milliseconds() as f64 / 1000.0;
+        if secs > 0.0 {
+            self.rate_up_bps = self.bytes_sent.saturating_sub(sent) as f64 / secs;
+            self.rate_down_bps = self.bytes_received.saturating_sub(received) as f64 / secs;
+        }
+        self.rate_mark = (self.bytes_sent, self.bytes_received, Utc::now());
     }
 }
 
@@ -138,7 +165,6 @@ impl DiagnosticsEngine {
     pub async fn snapshot(&self) -> DiagnosticsSnapshot {
         let m = self.metrics.read().await;
         let uptime = m.uptime();
-        let elapsed_secs = uptime.num_seconds().max(1) as f64;
 
         DiagnosticsSnapshot {
             timestamp: Utc::now().to_rfc3339(),
@@ -146,8 +172,8 @@ impl DiagnosticsEngine {
             rtt_ms: m.rtt_ms,
             bytes_sent: m.bytes_sent,
             bytes_received: m.bytes_received,
-            throughput_up_bps: m.throughput_up_bps(elapsed_secs),
-            throughput_down_bps: m.throughput_down_bps(elapsed_secs),
+            throughput_up_bps: m.rate_up_bps,
+            throughput_down_bps: m.rate_down_bps,
             packet_loss_pct: m.packet_loss_pct(),
             quality: m.connection_quality(),
             uptime_secs: uptime.num_seconds(),
@@ -165,22 +191,26 @@ impl DiagnosticsEngine {
         m.bytes_received += n;
     }
 
-    #[allow(dead_code)]
-    pub async fn record_rtt(&self, rtt_ms: f64) {
+    /// One completed keepalive: `Some(rtt)` if the pong came back, `None` if
+    /// it timed out.
+    ///
+    /// One method rather than the three this replaced (`record_rtt`,
+    /// `record_keepalive_sent`, `record_keepalive_received`, all three dead
+    /// since they were written). The count of pings sent and the count that
+    /// answered are the numerator and denominator of `packet_loss_pct`, so
+    /// bumping them under separate locks leaves a window where a reader sees
+    /// one and not the other and reports loss on a healthy link.
+    pub async fn record_ping(&self, rtt_ms: Option<f64>) {
         let mut m = self.metrics.write().await;
-        m.rtt_ms = Some(rtt_ms);
-    }
-
-    #[allow(dead_code)]
-    pub async fn record_keepalive_sent(&self) {
-        let mut m = self.metrics.write().await;
+        // The ping's cadence is the throughput window's cadence. One task, one
+        // clock: a separate timer for the rates would drift against this one
+        // and put two numbers measured over different windows on one line.
+        m.roll_rates();
         m.keepalive_sent += 1;
-    }
-
-    #[allow(dead_code)]
-    pub async fn record_keepalive_received(&self) {
-        let mut m = self.metrics.write().await;
-        m.keepalive_received += 1;
+        if let Some(rtt) = rtt_ms {
+            m.keepalive_received += 1;
+            m.rtt_ms = Some(rtt);
+        }
     }
 
     pub async fn set_connection_info(
@@ -306,11 +336,40 @@ mod tests {
         assert_eq!(m.connection_quality(), ConnectionQuality::Critical);
     }
 
+    /// The rate covers the window since the last mark, not the session.
     #[test]
-    fn test_throughput_calculation() {
+    fn a_rate_is_measured_over_its_window_and_not_over_the_session() {
         let mut m = SessionMetrics::new("s".into(), "h".into(), 22);
+
+        // Two seconds ago we had transferred nothing.
+        m.rate_mark = (0, 0, Utc::now() - chrono::Duration::seconds(2));
         m.bytes_sent = 1024;
-        assert!((m.throughput_up_bps(2.0) - 512.0).abs() < f64::EPSILON);
+        m.bytes_received = 4096;
+        m.roll_rates();
+        assert!((m.rate_up_bps - 512.0).abs() < 1.0, "{}", m.rate_up_bps);
+        assert!(
+            (m.rate_down_bps - 2048.0).abs() < 4.0,
+            "{}",
+            m.rate_down_bps
+        );
+
+        // Two more seconds, and nothing moved. A lifetime average would still
+        // report 256 B/s up; the window reports the truth.
+        m.rate_mark.2 = Utc::now() - chrono::Duration::seconds(2);
+        m.roll_rates();
+        assert_eq!(m.rate_up_bps, 0.0);
+        assert_eq!(m.rate_down_bps, 0.0);
+    }
+
+    /// A window of zero length must not divide by it.
+    #[test]
+    fn two_marks_in_the_same_instant_leave_the_last_rate_alone() {
+        let mut m = SessionMetrics::new("s".into(), "h".into(), 22);
+        m.rate_up_bps = 99.0;
+        m.rate_mark = (0, 0, Utc::now());
+        m.bytes_sent = 1024;
+        m.roll_rates();
+        assert!(m.rate_up_bps.is_finite());
     }
 
     #[tokio::test]

@@ -211,22 +211,30 @@ pub fn render_status_bar(
             Some(rtt) => {
                 let quality_str = format!("{:?}", d.quality);
                 let q_color = widgets::quality_color(theme, &quality_str);
+                // Lowercase labels, a space after each arrow. The mini strip
+                // renders these same four numbers in the same place on screen
+                // and writes them `rtt 0.6ms  ↓ 22 B/s  loss 0.0%`; this line
+                // wrote `RTT:0.6ms  ↑22 B/s  Loss:0.0%`, which is v1 house
+                // style that outlived v1. One reading, one spelling.
                 vec![
-                    Span::styled("RTT:", Style::default().fg(theme.text_muted)),
+                    Span::styled("rtt ", Style::default().fg(theme.text_muted)),
                     Span::raw(format!("{:.1}ms", rtt)),
-                    Span::raw("  "),
-                    Span::styled("↑", Style::default().fg(theme.rx_rate)),
+                    Span::raw("   "),
+                    Span::styled("↑ ", Style::default().fg(theme.rx_rate)),
                     Span::raw(widgets::format_bytes_rate(d.throughput_up_bps)),
-                    Span::raw("  "),
-                    Span::styled("↓", Style::default().fg(theme.tx_rate)),
+                    Span::raw("   "),
+                    Span::styled("↓ ", Style::default().fg(theme.tx_rate)),
                     Span::raw(widgets::format_bytes_rate(d.throughput_down_bps)),
-                    Span::raw("  "),
-                    Span::styled("Loss:", Style::default().fg(theme.text_muted)),
+                    Span::raw("   "),
+                    Span::styled("loss ", Style::default().fg(theme.text_muted)),
                     Span::raw(format!("{:.1}%", d.packet_loss_pct)),
-                    Span::raw("  "),
-                    Span::styled(format!("●{}", quality_str), Style::default().fg(q_color)),
-                    Span::raw("  "),
-                    Span::styled("Up:", Style::default().fg(theme.text_muted)),
+                    Span::raw("   "),
+                    Span::styled(
+                        format!("●{}", quality_str.to_lowercase()),
+                        Style::default().fg(q_color),
+                    ),
+                    Span::raw("   "),
+                    Span::styled("up ", Style::default().fg(theme.text_muted)),
                     Span::raw(widgets::format_duration_short(d.uptime_secs)),
                 ]
             }
@@ -235,8 +243,8 @@ pub fn render_status_bar(
                     "link quality unmeasured — waiting for the first keepalive",
                     Style::default().fg(theme.text_muted).italic(),
                 ),
-                Span::raw("  "),
-                Span::styled("Up:", Style::default().fg(theme.text_muted)),
+                Span::raw("   "),
+                Span::styled("up ", Style::default().fg(theme.text_muted)),
                 Span::raw(widgets::format_duration_short(d.uptime_secs)),
             ],
         }

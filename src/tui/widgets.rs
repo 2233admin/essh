@@ -11,7 +11,10 @@ pub fn format_bytes_rate(bytes_per_sec: f64) -> String {
     } else if bytes_per_sec >= 1_000.0 {
         format!("{:.1} KB/s", bytes_per_sec / 1_000.0)
     } else {
-        format!("{:.0}  B/s", bytes_per_sec)
+        // One space. The second was there to line `B/s` up under `KB/s`, but
+        // the number in front of it is one to four digits wide, so nothing
+        // lined up and the gap read as a typo.
+        format!("{:.0} B/s", bytes_per_sec)
     }
 }
 
@@ -76,7 +79,7 @@ mod tests {
 
     #[test]
     fn test_format_bytes_rate() {
-        assert_eq!(format_bytes_rate(500.0), "500  B/s");
+        assert_eq!(format_bytes_rate(500.0), "500 B/s");
         assert_eq!(format_bytes_rate(1500.0), "1.5 KB/s");
         assert_eq!(format_bytes_rate(1_500_000.0), "1.5 MB/s");
         assert_eq!(format_bytes_rate(1_500_000_000.0), "1.5 GB/s");
