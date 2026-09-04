@@ -8,6 +8,7 @@ pub mod filebrowser_view;
 pub mod help;
 pub mod host_monitor;
 pub mod hud;
+pub mod keymap;
 pub mod launcher_view;
 pub mod portfwd_view;
 pub mod session_view;

@@ -1737,51 +1737,207 @@ fn render_reachability(
     f.render_widget(Paragraph::new(lines), inner);
 }
 
+/// Screen 4 — every binding, and where the state lives. SPEC §3.5.
+///
+/// `2fr 1fr`, not the handoff's `1.25fr 1fr`. At that ratio the description
+/// column is 24 cells and its longest entry, `quit (sessions keep running)`,
+/// is 28 — which is defect 4 of the v0.3.3 list, help wrapping mid-phrase,
+/// rebuilt at a different width. `keymap::the_column_budget_clears_the_longest_binding`
+/// fails the build rather than leaving that to be noticed in a screenshot.
 fn render_config_tab(f: &mut Frame, area: Rect, theme: &Theme) {
-    let content = Paragraph::new(vec![
-        Line::raw(""),
-        Line::styled("  Configuration", Style::default().fg(theme.brand).bold()),
-        Line::raw(""),
-        Line::styled(
-            "  Config file: ~/.essh/config.toml",
-            Style::default().fg(theme.text_muted),
-        ),
-        Line::styled(
-            "  Cache DB:    ~/.essh/cache.db",
-            Style::default().fg(theme.text_muted),
-        ),
-        Line::styled(
-            "  Audit log:   ~/.essh/audit.log",
-            Style::default().fg(theme.text_muted),
-        ),
-        Line::styled(
-            format!("  Theme:       {}", theme.name),
-            Style::default().fg(theme.text_muted),
-        ),
-        Line::raw(""),
-        Line::styled(
-            "  Press 'e' to edit config, or 't' to cycle themes.",
-            Style::default().fg(theme.text_muted),
-        ),
-        Line::styled(
-            "  Ctrl+P (F10 in a session) opens the menu — type a theme name to",
-            Style::default().fg(theme.text_muted),
-        ),
-        Line::styled(
-            "  jump straight to it.",
-            Style::default().fg(theme.text_muted),
-        ),
-        Line::styled(
-            "  Changes reload from ~/.essh/config.toml without restarting.",
-            Style::default().fg(theme.text_muted),
-        ),
-    ])
-    .block(
-        Block::bordered()
-            .title("Config")
-            .border_style(Style::default().fg(theme.border)),
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Ratio(2, 3),
+            Constraint::Length(2),
+            Constraint::Min(24),
+        ])
+        .split(area);
+    render_keys_panel(f, cols[0], theme);
+    render_state_panel(f, cols[2], theme);
+}
+
+/// Panel 1 — everything on one screen, in two labelled columns.
+fn render_keys_panel(f: &mut Frame, area: Rect, theme: &Theme) {
+    use super::keymap;
+
+    let inner = d::pane(
+        f,
+        area,
+        theme,
+        &d::PanelOpts {
+            key: Some("1"),
+            title: Some("keys"),
+            sub: Some("everything on one screen"),
+            foot_left: &[("t", " cycle theme"), ("^P", " menu")],
+            ..Default::default()
+        },
     );
-    f.render_widget(content, area);
+    if inner.width < 24 || inner.height < 4 {
+        return;
+    }
+
+    let mut lines = vec![Line::from(vec![
+        Span::styled(
+            "In the dashboard, single keys. Inside a session, ",
+            Style::default().fg(theme.text_secondary),
+        ),
+        Span::styled("Ctrl+A", Style::default().fg(theme.key_hint)),
+        Span::styled(
+            " first — release, then the key.",
+            Style::default().fg(theme.text_secondary),
+        ),
+    ])];
+    lines.push(Line::raw(""));
+
+    // The function row, in whole cells. A cell is indivisible, so a break can
+    // only ever fall between bindings — which is what stopped `F4 forwards`
+    // rendering as `F4 /` then `forwards`, a binding that does not exist,
+    // printed by the screen whose job is to teach the bindings.
+    lines.extend(key_grid(
+        &keymap::FUNCTION_KEYS,
+        inner.width as usize,
+        3,
+        theme,
+    ));
+    lines.push(Line::raw(""));
+
+    // Two labelled columns side by side, each a stack of whole rows. Every
+    // binding is its own cell, so no label wraps mid-phrase.
+    let gap = 2usize;
+    let col_w = (inner.width as usize).saturating_sub(gap) / 2;
+    let left = column_rows(&keymap::IN_SESSION, col_w, theme);
+    let right = column_rows(&keymap::DASHBOARD, col_w, theme);
+
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("{:<col_w$}", "IN A SESSION"),
+            Style::default().fg(theme.text_muted),
+        ),
+        Span::raw(" ".repeat(gap)),
+        Span::styled("DASHBOARD", Style::default().fg(theme.text_muted)),
+    ]));
+    for i in 0..left.len().max(right.len()) {
+        let mut spans: Vec<Span> = Vec::new();
+        match left.get(i) {
+            Some(row) => spans.extend(row.clone()),
+            None => spans.push(Span::raw(" ".repeat(col_w))),
+        }
+        spans.push(Span::raw(" ".repeat(gap)));
+        if let Some(row) = right.get(i) {
+            spans.extend(row.clone());
+        }
+        lines.push(Line::from(spans));
+    }
+
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+/// One labelled column: `key` in its own field, description in the rest.
+fn column_rows(
+    binds: &[super::keymap::Bind],
+    width: usize,
+    theme: &Theme,
+) -> Vec<Vec<Span<'static>>> {
+    let key_w = super::keymap::key_width(binds);
+    let desc_w = width.saturating_sub(key_w + 2);
+    binds
+        .iter()
+        .map(|(k, desc)| {
+            let mut row = d::fit_left(k, key_w, Style::default().fg(theme.key_hint));
+            row.push(Span::raw("  "));
+            row.extend(d::fit_left(
+                desc,
+                desc_w,
+                Style::default().fg(theme.text_secondary),
+            ));
+            row
+        })
+        .collect()
+}
+
+/// A grid of whole `key label` cells, `cols` across.
+fn key_grid(
+    binds: &[super::keymap::Bind],
+    width: usize,
+    cols: usize,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let cell = width / cols.max(1);
+    binds
+        .chunks(cols.max(1))
+        .map(|chunk| {
+            let mut spans: Vec<Span> = Vec::new();
+            for (k, desc) in chunk {
+                let mut one = d::fit_left(k, 3, Style::default().fg(theme.key_hint));
+                one.push(Span::raw(" "));
+                one.extend(d::fit_left(
+                    desc,
+                    cell.saturating_sub(4),
+                    Style::default().fg(theme.text_secondary),
+                ));
+                spans.extend(one);
+            }
+            Line::from(spans)
+        })
+        .collect()
+}
+
+/// Panel 2 — where the state lives, and what it says about itself.
+fn render_state_panel(f: &mut Frame, area: Rect, theme: &Theme) {
+    let inner = d::pane(
+        f,
+        area,
+        theme,
+        &d::PanelOpts {
+            key: Some("2"),
+            title: Some("config"),
+            sub: Some("~/.essh"),
+            foot_left: &[("e", " edit"), ("t", " theme"), ("o", " reveal")],
+            ..Default::default()
+        },
+    );
+    if inner.width < 16 || inner.height == 0 {
+        return;
+    }
+
+    // Two lines per entry rather than one truncated one. `config.toml · 11
+    // hosts · edited 4h ago` is 38 cells in a column the layout gives 34, and
+    // clipping it loses the half that changes.
+    const LABEL: usize = 8;
+    let value_w = (inner.width as usize).saturating_sub(LABEL + 1);
+    let mut lines: Vec<Line> = Vec::new();
+    let mut entry = |label: &str, value: String, note: Option<String>| {
+        let mut row = d::fit_left(label, LABEL, Style::default().fg(theme.text_muted));
+        row.push(Span::raw(" "));
+        row.extend(d::fit_left(
+            &value,
+            value_w,
+            Style::default().fg(theme.text_primary),
+        ));
+        lines.push(Line::from(row));
+        if let Some(note) = note {
+            let mut cont = vec![Span::raw(" ".repeat(LABEL + 1))];
+            cont.extend(d::fit_left(
+                &note,
+                value_w,
+                Style::default().fg(theme.text_muted),
+            ));
+            lines.push(Line::from(cont));
+        }
+    };
+
+    entry("hosts", "config.toml".into(), None);
+    entry("cache", "cache.db".into(), None);
+    entry("audit", "audit.log".into(), None);
+    entry("theme", theme.name.to_string(), None);
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        "Edits to config.toml reload live — no restart.",
+        Style::default().fg(theme.text_muted),
+    )));
+
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
 fn render_footer(

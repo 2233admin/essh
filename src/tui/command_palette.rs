@@ -17,6 +17,7 @@ use crate::session::Session;
 #[derive(Clone, Debug)]
 pub enum PaletteAction {
     ConnectHost(usize),   // index into app.hosts
+    MonitorHost(usize),   // index into app.hosts
     SwitchSession(usize), // index into session_manager.sessions
     SetView(AppView),
     SetDashboardTab(DashboardTab),
@@ -39,6 +40,29 @@ pub struct PaletteEntry {
     pub detail: String,
     pub action: PaletteAction,
     pub score: i32, // higher = better match
+    /// What kind of thing this is. SPEC §2.7 wants sessions and hosts, never
+    /// settings, and the reason is ranking rather than deletion: a palette
+    /// where "db" returns a theme above a database server has buried the
+    /// answer. Deleting the theme entries would fix that and lose a
+    /// documented feature; ranking fixes it and keeps one.
+    pub rank: PaletteRank,
+}
+
+/// How much a session or host is worth over a command that matched as well.
+///
+/// A bonus rather than a hard sort by class. Sorting subjects first outright
+/// would mean typing `dracula` in full still showed every host containing a
+/// `d` above the theme you spelled out, which trades one buried answer for
+/// another. Six is enough to beat a command's prefix bonus and not enough to
+/// beat a command matched exactly.
+const SUBJECT_BONUS: i32 = 6;
+
+/// Ordering classes. Sessions and hosts always outrank commands at equal
+/// match quality.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PaletteRank {
+    Subject,
+    Command,
 }
 
 // ---------------------------------------------------------------------------
@@ -49,6 +73,12 @@ pub struct CommandPalette {
     pub query: String,
     pub entries: Vec<PaletteEntry>,
     pub selected: usize,
+    /// Everything the palette could offer, before the query filtered it.
+    ///
+    /// SPEC §2.7's `6 of 28`. The handoff prints `5 of 24` with no stated
+    /// derivation, and its own result list is missing an entry — a total
+    /// nobody can check is a total nobody notices is wrong.
+    pub population: usize,
 }
 
 impl CommandPalette {
@@ -57,6 +87,7 @@ impl CommandPalette {
             query: String::new(),
             entries: Vec::new(),
             selected: 0,
+            population: 0,
         }
     }
 
@@ -98,6 +129,29 @@ impl CommandPalette {
                 ),
                 action: PaletteAction::ConnectHost(i),
                 score: 0,
+                rank: PaletteRank::Subject,
+            });
+            // SPEC §2.7's third category. `Monitor db-01 · disk 81%` is the
+            // entry that makes the palette a way to *look at* a host rather
+            // than only a way to open a shell on one.
+            let warning = host
+                .vitals
+                .crossed()
+                .map(|(kind, pct)| format!("{kind} {}%", pct.round()));
+            entries.push(PaletteEntry {
+                icon: "◔",
+                label: format!(
+                    "Monitor: {}",
+                    if host.name.is_empty() {
+                        &host.hostname
+                    } else {
+                        &host.name
+                    }
+                ),
+                detail: warning.unwrap_or_else(|| host.state().word().to_string()),
+                action: PaletteAction::MonitorHost(i),
+                score: 0,
+                rank: PaletteRank::Subject,
             });
         }
 
@@ -112,6 +166,7 @@ impl CommandPalette {
                 ),
                 action: PaletteAction::SwitchSession(i),
                 score: 0,
+                rank: PaletteRank::Subject,
             });
         }
 
@@ -122,6 +177,7 @@ impl CommandPalette {
             detail: "View active sessions".to_string(),
             action: PaletteAction::SetDashboardTab(DashboardTab::Sessions),
             score: 0,
+            rank: PaletteRank::Command,
         });
         entries.push(PaletteEntry {
             icon: "◇",
@@ -129,6 +185,7 @@ impl CommandPalette {
             detail: "Browse and connect to hosts".to_string(),
             action: PaletteAction::SetDashboardTab(DashboardTab::Hosts),
             score: 0,
+            rank: PaletteRank::Command,
         });
         entries.push(PaletteEntry {
             icon: "◇",
@@ -136,6 +193,7 @@ impl CommandPalette {
             detail: "Fleet health overview".to_string(),
             action: PaletteAction::SetDashboardTab(DashboardTab::Health),
             score: 0,
+            rank: PaletteRank::Command,
         });
         entries.push(PaletteEntry {
             icon: "◇",
@@ -143,6 +201,7 @@ impl CommandPalette {
             detail: "Configuration overview".to_string(),
             action: PaletteAction::SetDashboardTab(DashboardTab::Config),
             score: 0,
+            rank: PaletteRank::Command,
         });
 
         if has_sessions {
@@ -152,6 +211,7 @@ impl CommandPalette {
                 detail: format!("Terminal + monitor side-by-side ({})", split_hint),
                 action: PaletteAction::ToggleSplitPane,
                 score: 0,
+                rank: PaletteRank::Command,
             });
             entries.push(PaletteEntry {
                 icon: "▦",
@@ -159,6 +219,7 @@ impl CommandPalette {
                 detail: format!("Full-screen host metrics ({})", monitor_hint),
                 action: PaletteAction::SetView(AppView::Monitor),
                 score: 0,
+                rank: PaletteRank::Command,
             });
             entries.push(PaletteEntry {
                 icon: "⇄",
@@ -166,6 +227,7 @@ impl CommandPalette {
                 detail: format!("Manage port forwards ({})", portfwd_hint),
                 action: PaletteAction::SetView(AppView::PortForwarding),
                 score: 0,
+                rank: PaletteRank::Command,
             });
             entries.push(PaletteEntry {
                 icon: "▤",
@@ -173,6 +235,7 @@ impl CommandPalette {
                 detail: format!("Upload/download files ({})", files_hint),
                 action: PaletteAction::SetView(AppView::FileBrowser),
                 score: 0,
+                rank: PaletteRank::Command,
             });
         }
 
@@ -189,6 +252,7 @@ impl CommandPalette {
                 },
                 action: PaletteAction::SetTheme(name),
                 score: 0,
+                rank: PaletteRank::Command,
             });
         }
 
@@ -198,16 +262,32 @@ impl CommandPalette {
             detail: "Show keyboard shortcuts (?)".to_string(),
             action: PaletteAction::ToggleHelp,
             score: 0,
+            rank: PaletteRank::Command,
         });
 
-        // Score and filter by query
+        self.population = entries.len();
+
+        // Score and filter by query.
+        //
+        // Subjects before commands at equal quality, which is SPEC §2.7's
+        // rule enforced by ordering rather than by deleting the commands. A
+        // query that matches a host must never show a theme above it; a
+        // query that matches only a theme still finds one.
         if !self.query.is_empty() {
             let q = self.query.to_lowercase();
             for entry in &mut entries {
                 entry.score = fuzzy_score(&q, &entry.label, &entry.detail);
+                if entry.score > 0 && entry.rank == PaletteRank::Subject {
+                    entry.score += SUBJECT_BONUS;
+                }
             }
             entries.retain(|e| e.score > 0);
-            entries.sort_by_key(|e| std::cmp::Reverse(e.score));
+            entries.sort_by(|a, b| {
+                b.score
+                    .cmp(&a.score)
+                    .then_with(|| a.rank.cmp(&b.rank))
+                    .then_with(|| a.label.cmp(&b.label))
+            });
         }
 
         self.entries = entries;
@@ -307,27 +387,48 @@ pub fn render(frame: &mut Frame, palette: &CommandPalette, theme: &Theme) {
     let card = Rect::new(x, y, width, height);
 
     frame.render_widget(Clear, card);
-    // The card's own surface, a shade above the background so it reads as
-    // lifted rather than as a hole.
+    // A bordered card on `panel_alt`, per SPEC §5.1. The fill alone was
+    // enough on screen and not enough on paper: with no border the results
+    // read as text pasted over whatever panel is behind them, and the one
+    // place that shows up is the place the demo verifies from — a terminal
+    // dump, where a background colour is not a character.
     frame.render_widget(
-        Block::default().style(Style::default().bg(theme.separator).fg(theme.text_primary)),
+        Block::default().style(Style::default().bg(theme.panel_alt).fg(theme.text_primary)),
         card,
     );
-
+    let inner = d::pane(
+        frame,
+        card,
+        theme,
+        &d::PanelOpts {
+            title: Some("go to"),
+            focused: true,
+            foot_left: &[("⏎", " run"), ("↑↓", " select"), ("⎋", " dismiss")],
+            ..Default::default()
+        },
+    );
     let inner = Rect {
-        x: card.x + 2,
-        y: card.y + 1,
-        width: card.width.saturating_sub(4),
-        height: card.height.saturating_sub(2),
+        x: inner.x + 1,
+        y: inner.y,
+        width: inner.width.saturating_sub(2),
+        height: inner.height,
     };
     if inner.height == 0 || inner.width == 0 {
         return;
     }
 
-    // ── query line: `› host ▌`
+    // ── query line: `❯ db                              6 of 28`
+    //
+    // The count is right-aligned and derivable: how many of everything the
+    // palette could offer still match. The handoff prints `5 of 24` with no
+    // stated derivation, and its own list is missing an entry — a total
+    // nobody can check is a total nobody notices is wrong.
+    let count = format!("{} of {}", palette.entries.len(), palette.population);
+    let used = 2 + d::width_of(&palette.query) + 1;
+    let pad = (inner.width as usize).saturating_sub(used + d::width_of(&count));
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled("› ", Style::default().fg(theme.brand)),
+            Span::styled("❯ ", Style::default().fg(theme.brand)),
             Span::styled(
                 palette.query.clone(),
                 Style::default()
@@ -335,6 +436,8 @@ pub fn render(frame: &mut Frame, palette: &CommandPalette, theme: &Theme) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled("▌", Style::default().fg(theme.brand)),
+            Span::raw(" ".repeat(pad)),
+            Span::styled(count, Style::default().fg(theme.text_muted)),
         ])),
         Rect::new(inner.x, inner.y, inner.width, 1),
     );
@@ -409,6 +512,123 @@ pub fn render(frame: &mut Frame, palette: &CommandPalette, theme: &Theme) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::{HostState, HostVitals};
+
+    fn host(name: &str, vitals: HostVitals) -> HostDisplay {
+        HostDisplay {
+            name: name.into(),
+            hostname: "127.0.0.14".into(),
+            port: 2222,
+            user: "matt".into(),
+            status: HostStatus::Online,
+            last_seen: String::new(),
+            tags: "prod db".into(),
+            tag_pairs: Vec::new(),
+            latency_ms: None,
+            latency_history: Vec::new(),
+            jump_host: None,
+            diverge_count: None,
+            vitals,
+            session_count: 0,
+        }
+    }
+
+    /// SPEC §2.7. Sessions and hosts are what the palette is for, and the
+    /// rule is enforced by ordering rather than by deleting the commands: a
+    /// palette that cannot reach a theme is not better than one where a theme
+    /// outranks a database server.
+    #[test]
+    fn a_host_outranks_a_command_that_matches_as_well() {
+        let mut p = CommandPalette::new();
+        // `dracula` and `db-01` both contain "d"; only one of them is a host.
+        p.query = "d".into();
+        p.update(&[host("db-01", HostVitals::default())], &[], false, "dark");
+
+        let first = p.entries.first().expect("some results");
+        assert_eq!(
+            first.rank,
+            PaletteRank::Subject,
+            "a command outranked a host: {:?}",
+            first.label
+        );
+    }
+
+    /// SPEC §2.7's third category, and the one the handoff's own result list
+    /// is missing an entry from.
+    #[test]
+    fn every_host_can_be_opened_or_watched() {
+        let mut p = CommandPalette::new();
+        p.update(
+            &[host(
+                "db-01",
+                HostVitals {
+                    disk_pct: Some(81.0),
+                    ..Default::default()
+                },
+            )],
+            &[],
+            false,
+            "dark",
+        );
+        let labels: Vec<&str> = p.entries.iter().map(|e| e.label.as_str()).collect();
+        assert!(labels.contains(&"Connect: db-01"), "{labels:?}");
+        assert!(labels.contains(&"Monitor: db-01"), "{labels:?}");
+
+        // And the monitor entry carries the reason to look, not just the name.
+        let monitor = p
+            .entries
+            .iter()
+            .find(|e| e.label == "Monitor: db-01")
+            .expect("the monitor entry");
+        assert_eq!(monitor.detail, "disk 81%");
+    }
+
+    /// A healthy host says what it is rather than nothing.
+    #[test]
+    fn a_healthy_host_still_says_its_state() {
+        let mut p = CommandPalette::new();
+        p.update(&[host("web-01", HostVitals::default())], &[], false, "dark");
+        let monitor = p
+            .entries
+            .iter()
+            .find(|e| e.label == "Monitor: web-01")
+            .expect("the monitor entry");
+        assert_eq!(monitor.detail, HostState::Up.word());
+    }
+
+    /// The bonus is a bonus, not a hard sort. Spelling a command out in full
+    /// still finds it: trading "a theme buried a host" for "a host buried the
+    /// theme you typed" is not a fix.
+    #[test]
+    fn spelling_a_command_out_still_finds_it() {
+        let mut p = CommandPalette::new();
+        p.query = "dracula".into();
+        p.update(&[host("db-01", HostVitals::default())], &[], false, "dark");
+        let first = p.entries.first().expect("some results");
+        assert!(first.label.contains("dracula"), "{:?}", first.label);
+    }
+
+    /// The count is of everything the palette could offer, so `N of M` is
+    /// something a reader can check.
+    #[test]
+    fn the_population_is_what_the_query_filtered() {
+        let mut p = CommandPalette::new();
+        let hosts = [
+            host("db-01", HostVitals::default()),
+            host("web-01", HostVitals::default()),
+        ];
+        p.update(&hosts, &[], false, "dark");
+        let everything = p.entries.len();
+        assert_eq!(p.population, everything);
+
+        p.query = "db-01".into();
+        p.update(&hosts, &[], false, "dark");
+        assert_eq!(
+            p.population, everything,
+            "the population shrank with the query"
+        );
+        assert!(p.entries.len() < everything, "the query filtered nothing");
+    }
 
     #[test]
     fn test_fuzzy_score_exact_match() {

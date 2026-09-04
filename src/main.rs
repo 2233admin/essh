@@ -2732,6 +2732,34 @@ async fn handle_palette_key(
                             open_session(app, config, audit, &host, runtimes, output_rxs).await?;
                         }
                     }
+                    // Monitoring a host means being on it: the metrics
+                    // collector needs an established handle. So this opens a
+                    // session if there is not one and switches to it if there
+                    // is, then goes to the monitor — rather than refusing,
+                    // which would make the entry a list of hosts you happen
+                    // to be attached to.
+                    PaletteAction::MonitorHost(idx) => {
+                        let Some(host) = app.hosts.get(idx).cloned() else {
+                            return Ok(KeyAction::Handled);
+                        };
+                        let existing = app
+                            .session_manager
+                            .sessions
+                            .iter()
+                            .position(|s| s.hostname == host.hostname && s.port == host.port);
+                        match existing {
+                            Some(i) => {
+                                app.session_manager.switch_to(i);
+                            }
+                            None => {
+                                open_session(app, config, audit, &host, runtimes, output_rxs)
+                                    .await?
+                            }
+                        }
+                        if app.session_manager.has_sessions() {
+                            app.view = AppView::Monitor;
+                        }
+                    }
                     PaletteAction::SwitchSession(idx) => {
                         // A different host: let its state raise the HUD afresh.
                         app.hud.reset();
@@ -2960,50 +2988,20 @@ async fn handle_dashboard_key(
         // file and dropped every measurement, so the fleet read as unreachable
         // until the next 60s cycle — the footer promised the opposite of what
         // the key did. They are two actions and now they are three keys.
-        KeyCode::Char('p') => {
-            let Some(host) = app.selected_host().cloned() else {
-                app.set_status("No host selected to probe.".to_string());
-                return Ok(KeyAction::Handled);
-            };
-            if tui_state.fleet_probe_task.is_some() {
-                app.set_status("A probe is already in flight.".to_string());
-                return Ok(KeyAction::Handled);
-            }
-            let timeout = tui_state.fleet_prober.probe_timeout();
-            let target = vec![(host.hostname.clone(), host.port)];
-            tui_state.fleet_probe_task = Some(tokio::spawn(async move {
-                fleet::FleetProber::probe_hosts(target, timeout).await
-            }));
-            app.set_status(format!("Probing {}…", host.name));
-        }
-        KeyCode::Char('P') => {
-            if tui_state.fleet_probe_task.is_some() {
-                app.set_status("A probe is already in flight.".to_string());
-                return Ok(KeyAction::Handled);
-            }
-            let hosts: Vec<(String, u16)> = app
-                .hosts
-                .iter()
-                .map(|h| (h.hostname.clone(), h.port))
-                .collect();
-            if hosts.is_empty() {
-                app.set_status("No hosts to probe.".to_string());
-                return Ok(KeyAction::Handled);
-            }
-            let timeout = tui_state.fleet_prober.probe_timeout();
-            let n = hosts.len();
-            tui_state.fleet_prober.mark_probe_started();
-            tui_state.fleet_probe_task = Some(tokio::spawn(async move {
-                fleet::FleetProber::probe_hosts(hosts, timeout).await
-            }));
-            app.set_status(format!("Probing {}…", crate::format::count(n, "host")));
-        }
+        // `p` probe-host and `P` probe-fleet are gone with this release.
+        //
+        // They were phase 0's fix for `r` lying about what it did. `r` means
+        // reconnect-or-retry now, which is the one-host case, and both the
+        // reachability prober and the fleet sampler refresh on their own
+        // cycles — so a manual fleet probe was a key that made the thing that
+        // was already happening happen slightly sooner. v2's aim is fewer
+        // keys, and these are the two that earned removing.
         KeyCode::Char('R') => {
             load_hosts_into_app(app, config)?;
             // The reload rebuilt every row from the cache and the config,
             // neither of which records reachability. Put the measurements back.
             apply_probe_state(app, &tui_state.fleet_prober);
-            app.set_status("Config reloaded. Probe results kept.".to_string());
+            app.set_status("Config reloaded. Measurements kept.".to_string());
         }
         // SPEC §4.3 — `r` is uniformly reconnect or retry: on a dropped
         // session, an offline host row, a stale card, and a failed forward.

@@ -498,7 +498,7 @@ fn the_demo_beats_match_the_spec() {
     tui.settle(1500);
     let reloaded = tui.frame("7b · R reloads and keeps probes");
     assert!(
-        reloaded.contains("Probe results kept"),
+        reloaded.contains("Measurements kept"),
         "reload must state that measurements survived:\n{reloaded}"
     );
     // SPEC §8.3 — the fleet must not read as unreachable after a reload.
@@ -635,12 +635,10 @@ fn the_demo_beats_match_the_spec() {
     tui.settle(1500);
     let help = tui.frame("12 · help");
     universal_rules(&help, "help");
-    for (key, label) in [
-        ("F1", "help"),
-        ("F4", "forwards"),
-        ("F9", "new session"),
-        ("F10", "command menu"),
-    ] {
+    // SPEC §4.4: six taught function keys, down from ten. The four that went
+    // duplicate prefix bindings that already exist and are still bound; what
+    // v2 objects to is teaching ten of them on a screen that should fit six.
+    for (key, label) in [("F1", "help"), ("F4", "forwards"), ("F9", "new session")] {
         assert!(
             help.contains(&format!("{key} {label}")),
             "`{key} {label}` is not whole on one row:\n{help}"
@@ -649,7 +647,7 @@ fn the_demo_beats_match_the_spec() {
     // The dashboard keys are below the fold on a 34-row terminal, so the beat
     // scrolls to them — which is also how a person would find them.
     for _ in 0..40 {
-        if tui.text().contains("Reload config") {
+        if tui.text().contains("Reload config") || tui.text().contains("Reconnect or retry") {
             break;
         }
         tui.send(b"\x1b[B");
@@ -658,14 +656,80 @@ fn the_demo_beats_match_the_spec() {
     tui.settle(800);
     let help_keys = tui.frame("12b · help, scrolled to the dashboard keys");
     universal_rules(&help_keys, "help scrolled");
+    // SPEC §4.3. `r` had three meanings across two releases: it refreshed the
+    // host list while claiming to probe, then refused to act at all while the
+    // split was taught, and now reconnects or retries. The screen whose job
+    // is to teach the bindings has to be the first place that is true.
     assert!(
-        help_keys.contains("p / P") && help_keys.contains("Reload config"),
-        "help must teach the probe/reload split:\n{help_keys}"
+        help_keys.contains("Reconnect or retry"),
+        "help does not teach what `r` now does:\n{help_keys}"
+    );
+    for stale in ["Refresh hosts", "p / P", "Probe selected host"] {
+        assert!(
+            !help_keys.contains(stale),
+            "help still teaches `{stale}`, which is gone:\n{help_keys}"
+        );
+    }
+
+    tui.send(&[0x1b]);
+    tui.settle(600);
+
+    // ── beat 13 · the keys and config screen ─────────────────────────────
+    tui.send(&[0x01]);
+    tui.settle(400);
+    tui.type_text("d");
+    tui.settle(1000);
+    tui.type_text("4");
+    tui.settle(1500);
+    let config = tui.frame("13 · keys and config");
+    universal_rules(&config, "config tab");
+
+    // SPEC §3.5 — every binding is its own cell, so none wraps mid-phrase.
+    // The longest is the one that sets the column budget, and the handoff's
+    // own ratio clips it by four cells.
+    assert!(
+        config.contains("quit (sessions keep running)"),
+        "the longest binding is clipped, which is defect 4 rebuilt:\n{config}"
+    );
+    for split in ["quit (sessions keep", "reconnect /\n", "terminal +\n"] {
+        assert!(
+            !config.contains(&format!("{split}\n")),
+            "a binding broke across rows at `{split}`:\n{config}"
+        );
+    }
+    assert!(
+        config.contains("IN A SESSION") && config.contains("DASHBOARD"),
+        "the keys panel has no labelled columns:\n{config}"
     );
     assert!(
-        !help_keys.contains("Refresh hosts"),
-        "help still teaches the key that was split:\n{help_keys}"
+        config.contains("reload live"),
+        "the config panel does not state that edits take effect:\n{config}"
     );
+
+    // ── beat 14 · the command menu ───────────────────────────────────────
+    tui.send(&[0x10]); // ctrl-p
+    tui.settle(900);
+    tui.type_text("db");
+    tui.settle(900);
+    let palette = tui.frame("14 · command menu, filtered");
+    universal_rules(&palette, "palette");
+
+    // SPEC §2.7 — sessions and hosts, and a count a reader can check.
+    assert!(
+        palette.contains(" of "),
+        "the menu does not say how many of what:\n{palette}"
+    );
+    let first_result = palette
+        .lines()
+        .skip_while(|l| !l.contains('❯'))
+        .nth(2)
+        .unwrap_or("");
+    assert!(
+        first_result.contains("db-01") || first_result.contains("db"),
+        "a command outranked the host the query names: {first_result:?}\n{palette}"
+    );
+    tui.send(&[0x1b]);
+    tui.settle(500);
 
     println!("\nAll beats verified against docs/redesign/SPEC.md.");
 }

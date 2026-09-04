@@ -11,18 +11,12 @@ use crate::theme::Theme;
 /// A list rather than a hand-spaced string because the grid needs the pairs
 /// intact to keep each one on a single row, and the test needs them to check
 /// that it did.
-const FUNCTION_KEYS: [(&str, &str); 10] = [
-    ("F1", "help"),
-    ("F2", "monitor"),
-    ("F3", "files"),
-    ("F4", "forwards"),
-    ("F5", "mini"),
-    ("F6", "detach"),
-    ("F7", "prev session"),
-    ("F8", "next session"),
-    ("F9", "new session"),
-    ("F10", "command menu"),
-];
+/// The function row, from the one place it is written down.
+///
+/// It used to be a second copy here. That is how the help screen came to
+/// teach `r  Refresh hosts` for a release after `r` stopped refreshing
+/// anything: two lists, one of which nobody updated.
+use super::keymap::FUNCTION_KEYS;
 
 /// Lay `pairs` out as a grid of whole `key label` cells.
 ///
@@ -189,7 +183,7 @@ pub fn render(f: &mut Frame, theme: &Theme, prefix: &str, scroll: u16) {
         Line::styled("  Dashboard", heading_style),
         Line::from(vec![
             Span::styled("    1-4         ", key_style),
-            Span::styled("Switch tab (Sessions/Hosts/Fleet/Config)", desc_style),
+            Span::styled("Switch tab (Sessions/Hosts/Health/Config)", desc_style),
         ]),
         Line::from(vec![
             Span::styled("    j/k ↑/↓     ", key_style),
@@ -204,12 +198,16 @@ pub fn render(f: &mut Frame, theme: &Theme, prefix: &str, scroll: u16) {
             Span::styled("Add host (user@host[:port])", desc_style),
         ]),
         Line::from(vec![
-            Span::styled("    p / P       ", key_style),
-            Span::styled("Probe selected host / whole fleet", desc_style),
+            Span::styled("    r           ", key_style),
+            Span::styled("Reconnect or retry the selected host", desc_style),
+        ]),
+        Line::from(vec![
+            Span::styled("    Tab         ", key_style),
+            Span::styled("Focus the next panel (Sessions)", desc_style),
         ]),
         Line::from(vec![
             Span::styled("    R           ", key_style),
-            Span::styled("Reload config (keeps probe results)", desc_style),
+            Span::styled("Reload config (keeps measurements)", desc_style),
         ]),
         Line::from(vec![
             Span::styled("    /           ", key_style),
@@ -229,7 +227,7 @@ pub fn render(f: &mut Frame, theme: &Theme, prefix: &str, scroll: u16) {
         ]),
         Line::from(vec![
             Span::styled("    q / Ctrl+c  ", key_style),
-            Span::styled("Quit", desc_style),
+            Span::styled("Quit (sessions keep running)", desc_style),
         ]),
         Line::raw(""),
         Line::styled("  Search", heading_style),
