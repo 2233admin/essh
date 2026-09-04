@@ -25,9 +25,10 @@ pub fn render(
     let area = f.area();
 
     let popup_width = WANTED_WIDTH.min(area.width.saturating_sub(4));
-    // The add form needs three rows of its own: format, input, and the blank
-    // between them. Asking for them up front is what keeps the hint inside.
-    let form_rows: u16 = if adding { 4 } else { 0 };
+    // The add form needs a row per format line, plus the input and the keys.
+    // Asking for them up front is what keeps the hint inside the panel rather
+    // than clipped at its edge.
+    let form_rows: u16 = if adding { 5 } else { 0 };
     let rows = manager.forwards.len().max(1) as u16;
     let popup_height = (rows + form_rows + 5)
         .min(area.height.saturating_sub(2))
@@ -177,11 +178,20 @@ fn render_add_form(f: &mut Frame, area: Rect, input: &str, theme: &Theme) {
     let dim = Style::default().fg(theme.text_muted);
     let key = Style::default().fg(theme.key_hint);
 
+    // SPEC §3.4: the format sits outside the table, on rows of its own, so it
+    // cannot clip at the panel edge. Both directions now, because both work —
+    // it listed only `L` while `R` was refused, which was the honest state
+    // then and would be a missing feature now.
     let lines = vec![
         Line::from(vec![
             Span::styled("  L ", key),
-            Span::styled("127.0.0.1:PORT → HOST:PORT", dim),
-            Span::styled("   local, and the only one implemented", dim),
+            Span::styled("PORT:HOST:PORT", dim),
+            Span::styled("   here → there: we listen, they answer", dim),
+        ]),
+        Line::from(vec![
+            Span::styled("  R ", key),
+            Span::styled("PORT:HOST:PORT", dim),
+            Span::styled("   there → here: they listen, we answer", dim),
         ]),
         Line::from(vec![
             Span::styled("  ❯ ", key),
@@ -239,9 +249,16 @@ mod tests {
     fn the_add_form_format_is_never_clipped() {
         for width in [70, 90, 120, 150] {
             let s = screen(width, 24, &PortForwardManager::new(), true);
+            // Both directions, whole, on their own rows. `L` was the only one
+            // listed while `R` was refused; that was honest then and would be
+            // a missing feature now.
             assert!(
-                s.contains("127.0.0.1:PORT → HOST:PORT"),
-                "at {width} cols the format hint is cut off:\n{s}"
+                s.contains("L PORT:HOST:PORT") && s.contains("R PORT:HOST:PORT"),
+                "at {width} cols a format hint is cut off:\n{s}"
+            );
+            assert!(
+                s.contains("we listen") && s.contains("they listen"),
+                "at {width} cols the directions lost their explanations:\n{s}"
             );
             assert!(
                 s.contains("save") && s.contains("cancel"),

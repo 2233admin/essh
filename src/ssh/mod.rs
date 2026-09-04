@@ -90,6 +90,12 @@ impl fmt::Debug for AuthMethod {
 pub struct ClientHandler {
     host_key_fingerprint: Arc<Mutex<Option<String>>>,
     server_banner: Arc<Mutex<Option<String>>>,
+    /// Where `forwarded-tcpip` channels on this connection should go.
+    ///
+    /// Empty on every connection except the dedicated one a session opens for
+    /// remote forwards, which is why the handler can refuse an unrouted
+    /// channel outright: nothing else has any business sending one.
+    forwards: Arc<crate::portfwd::remote::Router>,
 }
 
 impl client::Handler for ClientHandler {
@@ -122,15 +128,47 @@ impl client::Handler for ClientHandler {
         }
     }
 
+    /// A connection the remote side accepted on our behalf. SPEC §6.4.
+    ///
+    /// This used to accept the channel and return, which left whoever
+    /// connected on the remote side holding a socket that would never answer.
+    /// A hang is a worse failure than a refusal: the far end cannot tell it
+    /// from a slow service.
+    ///
+    /// Now it is routed, or closed with a reason nobody has to guess at.
     async fn server_channel_open_forwarded_tcpip(
         &mut self,
-        _channel: Channel<Msg>,
-        _connected_address: &str,
-        _connected_port: u32,
+        channel: Channel<Msg>,
+        connected_address: &str,
+        connected_port: u32,
         _originator_address: &str,
         _originator_port: u32,
         _session: &mut client::Session,
     ) -> Result<(), Self::Error> {
+        match self
+            .forwards
+            .lookup(connected_address, connected_port)
+            .await
+        {
+            Some(route) => {
+                // Detached: this callback runs on the connection's event
+                // loop, and proxying inline would stall every other channel
+                // on the connection for the life of one TCP conversation.
+                tokio::spawn(async move {
+                    if let Err(e) = crate::portfwd::remote::proxy(channel, route).await {
+                        tracing::debug!(%e, "remote forward could not reach its target");
+                    }
+                });
+            }
+            None => {
+                tracing::debug!(
+                    address = connected_address,
+                    port = connected_port,
+                    "forwarded channel with no route; closing"
+                );
+                let _ = channel.close().await;
+            }
+        }
         Ok(())
     }
 }
@@ -144,11 +182,156 @@ pub struct SshSession {
     #[allow(dead_code)]
     session_id: String,
     pub jump_host: Option<String>,
+    /// A second connection, used only for remote (`-R`) forwards.
+    ///
+    /// `russh::Handle::tcpip_forward` takes `&mut self` while every other
+    /// call on the handle takes `&self`, so the shared `Arc` above cannot
+    /// make the request. See `portfwd::remote` for why this is a second
+    /// connection rather than a mutex around the first.
+    ///
+    /// Opened on the first remote forward and not before: a session that
+    /// never asks for one never pays for it.
+    forwarding: Arc<Mutex<Option<ForwardingLink>>>,
+}
+
+/// The dedicated connection, and the routing table its handler reads.
+struct ForwardingLink {
+    handle: Handle<ClientHandler>,
+    routes: Arc<crate::portfwd::remote::Router>,
+}
+
+impl SshSession {
+    /// Ask the server to listen on `bind_port` and send us what it accepts.
+    ///
+    /// Returns the port the server actually bound, which differs from the one
+    /// requested when the request was for port 0.
+    pub async fn request_remote_forward(
+        &self,
+        config: &ConnectConfig,
+        bind_address: &str,
+        bind_port: u16,
+        target_host: &str,
+        target_port: u16,
+        connections: Arc<std::sync::atomic::AtomicU64>,
+    ) -> Result<u16, SshError> {
+        let mut link = self.forwarding.lock().await;
+        if link.is_none() {
+            let routes = Arc::new(crate::portfwd::remote::Router::default());
+            let handle = SshClient::connect_for_forwarding(config, routes.clone()).await?;
+            *link = Some(ForwardingLink { handle, routes });
+        }
+        let link = link.as_mut().expect("just opened");
+
+        let bound = link
+            .handle
+            .tcpip_forward(bind_address, bind_port as u32)
+            .await
+            .map_err(|e| SshError::Connection(format!("the server refused the forward: {e}")))?;
+        // Port 0 asks the server to choose; anything else echoes back what we
+        // asked for, and some servers answer 0 regardless. Trust our own
+        // number unless we asked it to pick.
+        let bound = if bind_port == 0 {
+            bound as u16
+        } else {
+            bind_port
+        };
+
+        link.routes
+            .add(
+                bind_address,
+                bound as u32,
+                crate::portfwd::remote::Route {
+                    target_host: target_host.to_string(),
+                    target_port,
+                    connections,
+                },
+            )
+            .await;
+        Ok(bound)
+    }
+
+    /// Stop a remote forward. The route goes first, so a connection racing
+    /// the cancel is refused rather than proxied to a rule that is gone.
+    pub async fn cancel_remote_forward(
+        &self,
+        bind_address: &str,
+        bind_port: u16,
+    ) -> Result<(), SshError> {
+        let link = self.forwarding.lock().await;
+        let Some(link) = link.as_ref() else {
+            return Ok(());
+        };
+        link.routes.remove(bind_address, bind_port as u32).await;
+        link.handle
+            .cancel_tcpip_forward(bind_address, bind_port as u32)
+            .await
+            .map_err(|e| SshError::Connection(format!("could not cancel the forward: {e}")))
+    }
 }
 
 pub struct SshClient;
 
 impl SshClient {
+    /// A second connection to the same host, whose handler routes
+    /// `forwarded-tcpip` channels. `portfwd::remote` says why this exists.
+    ///
+    /// It authenticates the same way as the first, so it appears in the
+    /// host's auth log as a second login. That is the visible cost of the
+    /// feature, and it is paid only by sessions that use it.
+    async fn connect_for_forwarding(
+        config: &ConnectConfig,
+        routes: Arc<crate::portfwd::remote::Router>,
+    ) -> Result<Handle<ClientHandler>, SshError> {
+        let handler = ClientHandler {
+            host_key_fingerprint: Arc::new(Mutex::new(None)),
+            server_banner: Arc::new(Mutex::new(None)),
+            forwards: routes,
+        };
+        let mut handle = tokio::time::timeout(
+            config.timeout,
+            client::connect(
+                Arc::new(client::Config::default()),
+                (config.hostname.as_str(), config.port),
+                handler,
+            ),
+        )
+        .await
+        .map_err(|_| {
+            SshError::Connection(format!(
+                "no response from {}:{} after {}s",
+                config.hostname,
+                config.port,
+                config.timeout.as_secs()
+            ))
+        })??;
+
+        let authenticated = match &config.auth {
+            AuthMethod::Password(pw) => handle
+                .authenticate_password(&config.username, pw)
+                .await
+                .map_err(SshError::Russh)?
+                .success(),
+            AuthMethod::KeyFile { path, passphrase } => {
+                let key = russh::keys::load_secret_key(path, passphrase.as_deref())?;
+                let key = PrivateKeyWithHashAlg::new(Arc::new(key), None);
+                handle
+                    .authenticate_publickey(&config.username, key)
+                    .await
+                    .map_err(SshError::Russh)?
+                    .success()
+            }
+            AuthMethod::Agent => {
+                Self::authenticate_with_agent(&mut handle, &config.username).await?
+            }
+        };
+        if !authenticated {
+            return Err(SshError::Auth(
+                "the forwarding connection could not authenticate".into(),
+            ));
+        }
+        Ok(handle)
+    }
+
     pub async fn connect(
         config: &ConnectConfig,
     ) -> Result<(SshSession, String, Option<String>), SshError> {
@@ -160,6 +343,7 @@ impl SshClient {
         let handler = ClientHandler {
             host_key_fingerprint: host_key_fingerprint.clone(),
             server_banner: server_banner.clone(),
+            forwards: Arc::new(crate::portfwd::remote::Router::default()),
         };
 
         let mut handle = match tokio::time::timeout(
@@ -220,6 +404,7 @@ impl SshClient {
                 handle: Arc::new(handle),
                 session_id,
                 jump_host: None,
+                forwarding: Arc::new(Mutex::new(None)),
             },
             fingerprint,
             banner,
@@ -321,6 +506,7 @@ impl SshClient {
         let handler = ClientHandler {
             host_key_fingerprint: host_key_fingerprint.clone(),
             server_banner: server_banner.clone(),
+            forwards: Arc::new(crate::portfwd::remote::Router::default()),
         };
 
         let ssh_config = Arc::new(client::Config::default());
@@ -366,6 +552,7 @@ impl SshClient {
                 handle: Arc::new(handle),
                 session_id,
                 jump_host: Some(jump_config.hostname.clone()),
+                forwarding: Arc::new(Mutex::new(None)),
             },
             fingerprint,
             banner,

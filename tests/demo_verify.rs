@@ -582,9 +582,12 @@ fn the_demo_beats_match_the_spec() {
     tui.settle(600);
     let form = tui.frame("11b · add form");
     // SPEC §8.4 — the format hint is whole, not clipped at the panel edge.
+    // SPEC §3.4: both directions, whole, on rows outside the table. `L` was
+    // the only one offered while `R` was refused; that was honest then and
+    // would be a missing feature now.
     assert!(
-        form.contains("127.0.0.1:PORT → HOST:PORT"),
-        "the add-forward format is clipped:\n{form}"
+        form.contains("L PORT:HOST:PORT") && form.contains("R PORT:HOST:PORT"),
+        "an add-forward format is clipped:\n{form}"
     );
 
     tui.type_text("L:18080:localhost:80");

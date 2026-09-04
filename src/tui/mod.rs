@@ -484,6 +484,14 @@ pub struct App {
         tokio::task::JoinHandle<()>,
         std::sync::Arc<std::sync::atomic::AtomicU64>,
     )>,
+    /// Live connection counters, by forward id, for both directions.
+    ///
+    /// The counters existed and nothing read them: `Active { connections: 0 }`
+    /// was written once at bind and never revised, so a forward carrying
+    /// traffic reported "no connections yet" indefinitely. A count nobody
+    /// updates is worse than no count — it is a measurement that is always
+    /// wrong in the reassuring direction.
+    pub port_forward_counters: Vec<(String, std::sync::Arc<std::sync::atomic::AtomicU64>)>,
     // File browser
     pub file_browser: Option<FileBrowser>,
     // Command palette
@@ -550,6 +558,7 @@ impl App {
             notifications: Vec::new(),
             port_forward_managers: Vec::new(),
             port_forward_tasks: Vec::new(),
+            port_forward_counters: Vec::new(),
             port_forward_input: String::new(),
             port_forward_adding: false,
             file_browser: None,
@@ -661,6 +670,35 @@ impl App {
         }
     }
 
+    /// Put the live connection counts back on the forwards that are active.
+    ///
+    /// Called each frame with everything else that is derived rather than
+    /// stored, for the same reason: a number kept in two places is a number
+    /// that eventually disagrees with itself.
+    pub fn refresh_forward_counts(&mut self) {
+        use std::sync::atomic::Ordering;
+        for mgr in self.port_forward_managers.iter_mut() {
+            for fwd in mgr.forwards.iter_mut() {
+                if !matches!(fwd.state, crate::portfwd::ForwardState::Active { .. }) {
+                    continue;
+                }
+                let Some((_, counter)) = self
+                    .port_forward_counters
+                    .iter()
+                    .find(|(id, _)| *id == fwd.id)
+                else {
+                    continue;
+                };
+                let connections = counter.load(Ordering::Relaxed);
+                // Assigned rather than `set_state`d: the state has not
+                // changed, only its count, and stamping `state_since` here
+                // would make a forward bound an hour ago claim it was bound a
+                // second ago every time somebody used it.
+                fwd.state = crate::portfwd::ForwardState::Active { connections };
+            }
+        }
+    }
+
     /// Sessions per host, recomputed from the session manager.
     ///
     /// Derived rather than tracked. A count kept in two places is a count
@@ -670,6 +708,7 @@ impl App {
     /// session, which is what that disagreement looks like.
     pub fn refresh_derived(&mut self) {
         self.recount_sessions_per_host();
+        self.refresh_forward_counts();
         self.activity.observe_hosts(&self.hosts);
         self.activity.observe_sessions(
             &self.session_manager.sessions,

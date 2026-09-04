@@ -9,12 +9,12 @@ to 9 are sized against the code as it stands after them.
 | 1 · design system | done, `a5005aa` |
 | 2 · fleet metrics | done, `a3a0ae0` |
 | 3 · hosts and health | done, `a3a0ae0` and `261ef86` |
-| 4 · sessions | next |
-| 5 · terminal, files, forwards | |
-| 6 · help and config | |
-| 7 · themes | |
-| 8 · divergence moves out | done in part: `essh diff` ships, `D` stays (SPEC §8) |
-| 9 · remote port forwards | |
+| 4 · sessions | done, `08e750c` |
+| 5 · terminal, files, forwards | done, `54efaff` |
+| 6 · help and config | done, `8817693` |
+| 7 · themes | done, `682cad6` |
+| 8 · divergence moves out | done, `99a9e90`; `essh diff` ships and `D` stays (SPEC §8) |
+| 9 · remote port forwards | done |
 
 Ordering rule: nothing that renders a number ships before the data behind it
 exists. The v1 plan opened with that warning about three screens. v2 makes it

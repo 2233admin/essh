@@ -397,3 +397,178 @@ mod live {
         );
     }
 }
+
+/// Remote port forwards, against a real sshd. SPEC §6.4.
+///
+/// The router's unit tests prove the lookup. They cannot prove that the
+/// server accepts the request, that the channel comes back, or that the bytes
+/// arrive — which is the whole feature, and all three failed silently before
+/// this existed: `server_channel_open_forwarded_tcpip` took the channel and
+/// dropped it, so the far end hung rather than erroring.
+#[cfg(test)]
+mod remote_forward_live {
+    use std::time::Duration;
+
+    use crate::ssh::{AuthMethod, ConnectConfig, SshClient};
+
+    fn cfg() -> ConnectConfig {
+        ConnectConfig {
+            hostname: "127.0.0.12".into(),
+            port: 2222,
+            username: "matt".into(),
+            auth: AuthMethod::KeyFile {
+                path: std::path::PathBuf::from(std::env::var("HOME").expect("HOME"))
+                    .join(".ssh/id_ed25519"),
+                passphrase: None,
+            },
+            timeout: Duration::from_secs(10),
+        }
+    }
+
+    fn reachable() -> bool {
+        use std::net::{SocketAddr, TcpStream};
+        let addr: SocketAddr = "127.0.0.12:2222".parse().expect("addr");
+        TcpStream::connect_timeout(&addr, Duration::from_millis(600)).is_ok()
+    }
+
+    /// The end-to-end claim: the server listens, and what it accepts reaches
+    /// a local socket.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_remote_forward_carries_bytes_from_the_server_to_us() {
+        if !reachable() {
+            eprintln!("SKIP: fixture fleet not up; run ./scripts/fleet.sh up");
+            return;
+        }
+
+        // A local echo server standing in for whatever the forward points at.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local target");
+        let target_port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = [0u8; 64];
+                    if let Ok(n) = sock.read(&mut buf).await {
+                        let _ = sock.write_all(&buf[..n]).await;
+                        let _ = sock.flush().await;
+                    }
+                });
+            }
+        });
+
+        let (session, _, _) = SshClient::connect(&cfg()).await.expect("connect");
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+
+        // Port 0 asks the server to choose, so the test cannot collide with
+        // anything already listening in the container.
+        let bound = session
+            .request_remote_forward(
+                &cfg(),
+                "localhost",
+                0,
+                "127.0.0.1",
+                target_port,
+                std::sync::Arc::clone(&counter),
+            )
+            .await
+            .expect("the server accepted the forward");
+        assert!(bound > 0, "the server bound port {bound}");
+
+        // Reach it from the far side: a command *on the host* connecting to
+        // the port the host is now listening on. That is the direction the
+        // feature exists for, and the one that was silently broken.
+        let out = session
+            .handle
+            .channel_open_session()
+            .await
+            .expect("channel");
+        let mut out = out;
+        // perl rather than nc: the fixture image has no netcat, and bash's
+        // /dev/tcp is a bashism the container's `sh` does not have. This is
+        // the one place the test has to reach *from* the host, so it uses
+        // what the host actually has.
+        let probe = format!(
+            r#"perl -e 'use IO::Socket::INET; my $s = IO::Socket::INET->new("127.0.0.1:{bound}") or die; print $s "hello"; $s->flush; my $r; $s->sysread($r, 16); print $r;'"#
+        );
+        out.exec(true, probe.as_bytes()).await.expect("exec");
+
+        let mut echoed = Vec::new();
+        while let Some(msg) = out.wait().await {
+            match msg {
+                russh::ChannelMsg::Data { data } => echoed.extend_from_slice(&data),
+                russh::ChannelMsg::Eof | russh::ChannelMsg::Close => break,
+                _ => {}
+            }
+        }
+
+        let echoed = String::from_utf8_lossy(&echoed);
+        assert!(
+            echoed.contains("hello"),
+            "the forward did not carry the bytes back; got {echoed:?}"
+        );
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "the connection was not counted"
+        );
+
+        session
+            .cancel_remote_forward("localhost", bound)
+            .await
+            .expect("cancel");
+        session.close().await.ok();
+    }
+
+    /// A cancelled forward stops being routed, so a connection racing the
+    /// cancel is refused rather than proxied to a rule that is gone.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cancelling_a_forward_stops_the_server_listening() {
+        if !reachable() {
+            eprintln!("SKIP: fixture fleet not up");
+            return;
+        }
+        let (session, _, _) = SshClient::connect(&cfg()).await.expect("connect");
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let bound = session
+            .request_remote_forward(&cfg(), "localhost", 0, "127.0.0.1", 9, counter)
+            .await
+            .expect("forward");
+        session
+            .cancel_remote_forward("localhost", bound)
+            .await
+            .expect("cancel");
+
+        let probe = session
+            .handle
+            .channel_open_session()
+            .await
+            .expect("channel");
+        let mut probe = probe;
+        probe
+            .exec(
+                true,
+                format!(
+                    r#"perl -e 'use IO::Socket::INET; print IO::Socket::INET->new("127.0.0.1:{bound}") ? "open" : "shut";'"#
+                )
+                .as_bytes(),
+            )
+            .await
+            .expect("exec");
+        let mut out = Vec::new();
+        while let Some(msg) = probe.wait().await {
+            match msg {
+                russh::ChannelMsg::Data { data } => out.extend_from_slice(&data),
+                russh::ChannelMsg::Eof | russh::ChannelMsg::Close => break,
+                _ => {}
+            }
+        }
+        let out = String::from_utf8_lossy(&out);
+        assert!(
+            out.contains("shut"),
+            "the server is still listening on {bound} after the cancel: {out:?}"
+        );
+        session.close().await.ok();
+    }
+}

@@ -1,3 +1,5 @@
+pub mod remote;
+
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -101,6 +103,33 @@ impl PortForwardManager {
         let fwd = PortForward {
             id: uuid::Uuid::new_v4().to_string(),
             direction: ForwardDirection::Local,
+            bind_host: bind_host.to_string(),
+            bind_port,
+            target_host: target_host.to_string(),
+            target_port,
+            state: ForwardState::Starting,
+            state_since: Instant::now(),
+        };
+        self.forwards.push(fwd);
+        self.forwards.last().unwrap()
+    }
+
+    /// A remote (`-R`) forward: the *server* listens, and what it accepts
+    /// comes back to us. SPEC §6.4.
+    ///
+    /// `bind_host` is the address the server is asked to bind, which most
+    /// sshd configurations pin to loopback whatever you request
+    /// (`GatewayPorts no`, the default).
+    pub fn add_remote(
+        &mut self,
+        bind_host: &str,
+        bind_port: u16,
+        target_host: &str,
+        target_port: u16,
+    ) -> &PortForward {
+        let fwd = PortForward {
+            id: uuid::Uuid::new_v4().to_string(),
+            direction: ForwardDirection::Remote,
             bind_host: bind_host.to_string(),
             bind_port,
             target_host: target_host.to_string(),

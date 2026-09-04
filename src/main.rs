@@ -2505,18 +2505,16 @@ async fn handle_portfwd_key(
                         )
                         .await;
                     }
-                    // Refused rather than listed. `tcpip_forward` needs `&mut`
-                    // on the russh handle, which sessions hold behind an
-                    // `Arc`, and incoming channels would land in
-                    // `server_channel_open_forwarded_tcpip`, which currently
-                    // drops them. Both are fixable, and until they are fixed
-                    // the honest answer is no — adding the row was how two
-                    // forwards came to be listed as Active with nothing bound.
                     portfwd::ForwardDirection::Remote => {
-                        app.set_status(
-                            "Remote (R) forwards are not implemented yet — only local (L)."
-                                .to_string(),
-                        );
+                        add_remote_forward(
+                            app,
+                            runtimes,
+                            active_idx,
+                            bind_port,
+                            &target_host,
+                            target_port,
+                        )
+                        .await;
                     }
                 }
             }
@@ -2541,19 +2539,52 @@ async fn handle_portfwd_key(
         }
         KeyCode::Char('d') => {
             if let Some(active_idx) = app.session_manager.active_index {
-                if let Some(mgr) = app.port_forward_managers.get_mut(active_idx) {
-                    if let Some(id) = mgr.selected_id().map(|s| s.to_string()) {
+                // Taken before the row goes, because cancelling a remote
+                // forward needs to know which port the server is holding.
+                let doomed = app
+                    .port_forward_managers
+                    .get(active_idx)
+                    .and_then(|m| m.selected_id().map(|s| s.to_string()))
+                    .and_then(|id| {
+                        app.port_forward_managers
+                            .get(active_idx)
+                            .and_then(|m| m.get(&id))
+                            .map(|f| (id, f.direction.clone(), f.bind_host.clone(), f.bind_port))
+                    });
+
+                if let Some((id, direction, bind_host, bind_port)) = doomed {
+                    if let Some(mgr) = app.port_forward_managers.get_mut(active_idx) {
                         mgr.remove(&id);
-                        // Drop the listener with the row. A forward removed
-                        // from the list while its socket stays bound is the
-                        // same class of lie as one listed while unbound.
-                        if let Some(pos) =
-                            app.port_forward_tasks.iter().position(|(i, _, _)| *i == id)
-                        {
-                            let (_, task, _) = app.port_forward_tasks.remove(pos);
-                            task.abort();
+                    }
+                    // Drop the listener with the row. A forward removed from
+                    // the list while its socket stays bound is the same class
+                    // of lie as one listed while unbound — and for a remote
+                    // forward the socket belongs to the server, so it has to
+                    // be told.
+                    match direction {
+                        portfwd::ForwardDirection::Local => {
+                            if let Some(pos) =
+                                app.port_forward_tasks.iter().position(|(i, _, _)| *i == id)
+                            {
+                                let (_, task, _) = app.port_forward_tasks.remove(pos);
+                                task.abort();
+                            }
+                        }
+                        portfwd::ForwardDirection::Remote => {
+                            if let Some(Some(rt)) = runtimes.get(active_idx) {
+                                if let Err(e) = rt
+                                    .ssh_session
+                                    .cancel_remote_forward(&bind_host, bind_port)
+                                    .await
+                                {
+                                    app.set_status(format!(
+                                        "The row is gone but the server may still be listening: {e}"
+                                    ));
+                                }
+                            }
                         }
                     }
+                    app.port_forward_counters.retain(|(i, _)| *i != id);
                 }
             }
         }
@@ -2615,6 +2646,77 @@ async fn handle_portfwd_key(
 /// The state written here is always the result of a real `bind`, never an
 /// assumption: `Active` means the listener exists, `Failed` carries the OS
 /// error that stopped it.
+/// Ask the server to listen, and route what it accepts. SPEC §6.4.
+///
+/// The state model is the same as a local forward's and for the same reason:
+/// the request either succeeded or it did not, and `Active` means the server
+/// said yes rather than that we hoped it would. A server with
+/// `AllowTcpForwarding no` refuses, and the row says so with the reason
+/// instead of sitting on `Starting` forever.
+async fn add_remote_forward(
+    app: &mut App,
+    runtimes: &[Option<SessionRuntime>],
+    session_idx: usize,
+    bind_port: u16,
+    target_host: &str,
+    target_port: u16,
+) {
+    let Some(Some(rt)) = runtimes.get(session_idx) else {
+        app.set_status("That session is not connected.".to_string());
+        return;
+    };
+
+    let counter = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    // Most sshd configurations pin the listener to loopback whatever is
+    // requested (`GatewayPorts no`, the default), so ask for what will
+    // actually happen rather than for something the server will quietly
+    // narrow.
+    const BIND: &str = "localhost";
+    let result = rt
+        .ssh_session
+        .request_remote_forward(
+            &rt.connect_config,
+            BIND,
+            bind_port,
+            target_host,
+            target_port,
+            std::sync::Arc::clone(&counter),
+        )
+        .await;
+
+    let id = {
+        let Some(mgr) = app.port_forward_managers.get_mut(session_idx) else {
+            return;
+        };
+        mgr.add_remote(BIND, bind_port, target_host, target_port)
+            .id
+            .clone()
+    };
+
+    let (state, message) = match result {
+        Ok(bound) => (
+            portfwd::ForwardState::Active { connections: 0 },
+            format!("{BIND}:{bound} on the remote → {target_host}:{target_port} here"),
+        ),
+        Err(err) => {
+            let reason = err.to_string();
+            (
+                portfwd::ForwardState::Failed {
+                    reason: reason.clone(),
+                },
+                format!("Remote forward failed: {reason}"),
+            )
+        }
+    };
+    if let Some(mgr) = app.port_forward_managers.get_mut(session_idx) {
+        mgr.set_state(&id, state);
+    }
+    // Counted like a local forward's connections, from the same shared
+    // counter the proxy tasks increment.
+    app.port_forward_counters.push((id, counter));
+    app.set_status(message);
+}
+
 async fn add_local_forward(
     app: &mut App,
     runtimes: &[Option<SessionRuntime>],
@@ -2643,7 +2745,9 @@ async fn add_local_forward(
     let state =
         match portfwd::start_local_forward(handle, &fwd, std::sync::Arc::clone(&counter)).await {
             Ok(task) => {
-                app.port_forward_tasks.push((id.clone(), task, counter));
+                app.port_forward_tasks
+                    .push((id.clone(), task, std::sync::Arc::clone(&counter)));
+                app.port_forward_counters.push((id.clone(), counter));
                 portfwd::ForwardState::Active { connections: 0 }
             }
             Err(err) => portfwd::ForwardState::Failed {
