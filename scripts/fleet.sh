@@ -197,11 +197,31 @@ cmd_up() {
   # nginx and redis take a moment to bind. Checking immediately reports drift
   # that is only a race, which is worse than no check: it teaches you to
   # ignore the one thing that tells you the fixture is wrong.
+  #
+  # `fleet_ok` and not `cmd_check`: the latter reports and then `die`s, and a
+  # function that exits the script cannot be a loop condition. Used as one, the
+  # first miss killed the retry it was the retry for — which is how a demo
+  # render came to fail on staging that would have been there a second later.
   for _ in $(seq 20); do
-    if cmd_check >/dev/null 2>&1; then break; fi
+    if fleet_ok; then break; fi
     sleep 0.25
   done
   cmd_check
+}
+
+# The same checks, quietly, as a predicate. `cmd_check` reports and dies; this
+# only answers.
+fleet_ok() {
+  for spec in "${HOSTS[@]}"; do
+    IFS=: read -r name ip role <<<"$spec"
+    if [ "$role" = offline ]; then
+      if running "$name"; then return 1; fi
+      continue
+    fi
+    if ! reachable "$ip"; then return 1; fi
+    if ! verify_role "$name" "$role" 2>/dev/null; then return 1; fi
+  done
+  return 0
 }
 
 cmd_check() {

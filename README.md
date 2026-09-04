@@ -96,7 +96,7 @@ prefix.
 | **Fleet health** | The same readings for every host in your config, including the ones you have no session on. What needs attention, in sentences, with the process responsible named. |
 | **Divergence** | On request: compares each host against its peer set and tells you *which* host differs, on *which* facet, and why. |
 | **File transfer** | Two-pane local/remote browser over SFTP. |
-| **Port forwarding** | Add, inspect and remove forwards without dropping the session. |
+| **Port forwarding** | Local and remote, added and removed without dropping the session. State is the bind result, so `active` means something is listening. |
 | **Audit and replay** | Structured JSON audit log; sessions record to asciicast for replay. |
 
 ### Fleet health
