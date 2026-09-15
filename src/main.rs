@@ -21,6 +21,7 @@ mod session;
 mod ssh;
 mod sshconfig;
 mod theme;
+mod tmux;
 mod tui;
 mod workspace;
 
@@ -197,7 +198,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     match cli.command {
-        None => run_tui(app_config).await,
+        None => tmux::run(tmux::Action::Start, app_config),
         Some(cmd) => run_command(cmd, app_config).await,
     }
 }
@@ -210,6 +211,8 @@ async fn run_command(cmd: Commands, config: AppConfig) -> anyhow::Result<()> {
     let audit = AuditLogger::default_logger();
 
     match cmd {
+        Commands::Tmux { action } => tmux::run(action, config)?,
+        Commands::Legacy => run_tui(config).await?,
         Commands::Connect {
             target,
             port,

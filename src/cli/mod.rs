@@ -37,6 +37,14 @@ fn parse_theme(raw: &str) -> Result<String, String> {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    /// Launch the previous native SSH interface
+    Legacy,
+    /// Persistent tmux workspace and its helpers
+    #[command(disable_help_subcommand = true)]
+    Tmux {
+        #[command(subcommand)]
+        action: crate::tmux::Action,
+    },
     /// Connect to a host
     Connect {
         /// Host name or user@hostname

@@ -1,3 +1,5 @@
+> Superseded for the default interface by [v3](handoff-v3/README.md). This specification documents `essh legacy`.
+
 # ESSH TUI redesign v2, corrected handoff
 
 Supersedes `superseded/SPEC-v1.md` and corrects `handoff-v2/README.md`

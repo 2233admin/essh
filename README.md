@@ -1,3 +1,32 @@
+# essh v3 — persistent SSH workspace
+
+This branch builds the tmux-based redesign. Run `cargo build --release`, then
+`./target/release/essh` from a terminal. It requires local tmux 3.3+, OpenSSH,
+and remote tmux on the hosts you connect to.
+
+- Hosts come from SSH configuration, essh configuration, and the existing host cache.
+- Enter connects; Ctrl+A s switches sessions; Ctrl+A n opens another.
+- Ctrl+A m toggles the metrics strip; Ctrl+A d returns to hosts.
+- q on hosts (or Ctrl+A q in a session) detaches without ending remote work.
+- Ctrl+A x confirms before terminating a remote session.
+- Ctrl+B reaches remote tmux; Ctrl+A is the local prefix.
+
+The local controller and remote sessions use separate tmux servers. Session IDs
+are saved across local restarts. Disconnected sessions show unverified remote
+state; reconnect recreates a shell if the old session has ended. OpenSSH handles
+authentication and known-hosts checking. Metrics are optional and currently Linux
+based; unavailable readings display as missing values.
+
+[Architecture and corrected handoff](docs/redesign/handoff-v3/README.md) ·
+[Standalone design reference](docs/redesign/handoff-v3/index.html)
+
+Validate with `cargo test`, `cargo clippy --all-targets`, and the live SSH
+regression check `python3 scripts/test-tmux-v3.py`. The previous interface
+is available through `essh legacy`; its documentation follows for existing CLI
+workflows. The v3 interface uses the fixed netwatch palette.
+
+---
+
 <p align="center">
 
 ```

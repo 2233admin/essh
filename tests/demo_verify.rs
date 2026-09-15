@@ -126,6 +126,7 @@ impl Tui {
             .expect("openpty");
 
         let mut cmd = CommandBuilder::new(bin());
+        cmd.arg("legacy");
         cmd.env("HOME", home);
         cmd.env("TERM", "xterm-256color");
         cmd.cwd(home);

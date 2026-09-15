@@ -1,3 +1,5 @@
+> The default interface now follows [v3](handoff-v3/README.md). This completed v2 plan is retained for `essh legacy`.
+
 # ESSH TUI redesign v2, implementation plan
 
 Companion to `SPEC.md`. Phases 0 to 3 are committed on `redesign/v2`; phases 4

@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>essh v3 · design reference</title>
+</head>
+<body>
+<x-dc>
+<helmet>
+
+
+<style>
+  x-dc { display:block; }
+  sc-if { display:contents; }
+  sc-if[hidden] { display:none; }
+  button { font:inherit; background:transparent; }
+  button:focus-visible { outline:2px solid #4fd1c5; }
+  html,body{margin:0;padding:0;background:#050708;}
+  *{box-sizing:border-box;}
+  a{color:#4fd1c5;text-decoration:none;}
+  a:hover{color:#8ae6dd;}
+</style>
+</helmet>
+<div style="font-family:'JetBrains Mono',ui-monospace,monospace;background:#050708;padding:28px;min-height:100vh;display:flex;flex-direction:column;align-items:flex-start;gap:18px">
+
+  <div style="width:1180px;display:flex;align-items:center;gap:10px;color:#3f4b52;font-size:11px;letter-spacing:.14em;text-transform:uppercase">
+    <span>essh v3 — tmux + netwatch skin</span>
+    <span style="flex:1;height:1px;background:#14191d"></span>
+    <button type="button" data-screen="hosts" style="cursor:pointer;color:#6b7c8a;padding:3px 8px;border:1px solid #1c2429" style-hover="color:#cbd5dd">1 hosts</button>
+    <button type="button" data-screen="session" style="cursor:pointer;color:#6b7c8a;padding:3px 8px;border:1px solid #1c2429" style-hover="color:#cbd5dd">2 session</button>
+    <button type="button" data-screen="switch" style="cursor:pointer;color:#6b7c8a;padding:3px 8px;border:1px solid #1c2429" style-hover="color:#cbd5dd">3 switcher</button>
+    <button type="button" data-screen="help" style="cursor:pointer;color:#6b7c8a;padding:3px 8px;border:1px solid #1c2429" style-hover="color:#cbd5dd">4 help</button>
+  </div>
+
+  <!-- ───────────── terminal ───────────── -->
+  <div style="width:1180px;height:640px;border:1px solid #1c2429;background:#080b0d;display:flex;flex-direction:column;font-size:13px;line-height:1.5;position:relative;overflow:hidden">
+
+    <!-- ══════ 1 · HOSTS ══════ -->
+    <sc-if data-condition="isHosts">
+    <div style="flex:1;display:flex;flex-direction:column;padding:14px 18px 8px">
+      <div style="display:flex;align-items:center;gap:14px;color:#4fd1c5;margin-bottom:12px">
+        <span style="font-weight:700">essh</span>
+        <span style="color:#2a3439">│</span>
+        <span style="color:#8b9aa6">10 hosts</span>
+        <span style="color:#2a3439">·</span>
+        <span style="color:#8b9aa6">4 sessions</span>
+        <span style="margin-left:auto;color:#5b6b7a">/ filter</span>
+      </div>
+
+      <div style="display:grid;grid-template-columns:14px 16ch 24ch 5ch 16ch 1fr;gap:0 16px;align-items:center;white-space:nowrap">
+        <div></div>
+        <div style="color:#5b6b7a">HOST</div>
+        <div style="color:#5b6b7a">USER@ADDRESS</div>
+        <div style="color:#5b6b7a;text-align:right">TMUX</div>
+        <div style="color:#5b6b7a">LATENCY</div>
+        <div style="color:#5b6b7a">LAST</div>
+        <div style="grid-column:1/-1;height:1px;background:#14191d;margin:6px 0 4px"></div>
+
+        <div style="color:#35d07f">●</div><div style="color:#cbd5dd">web-01</div><div style="color:#5b6b7a">matt@10.0.1.11</div><div style="color:#3f4b52;text-align:right">·</div><div style="display:flex;gap:8px;align-items:baseline"><span style="color:#35d07f;letter-spacing:-1px">⣀⣀⣀⣠⣀⣀⣀⣀⣄⣀</span><span style="color:#8b9aa6;font-size:12px">4ms</span></div><div style="color:#5b6b7a">2d ago</div>
+
+        <div style="grid-column:1/-1;display:grid;grid-template-columns:14px 16ch 24ch 5ch 16ch 1fr;gap:0 16px;align-items:center;background:#10171b;margin:0 -10px;padding:1px 10px;box-shadow:inset 2px 0 0 #4fd1c5">
+          <div style="color:#35d07f">●</div><div style="color:#fff;font-weight:700">web-02</div><div style="color:#8b9aa6">matt@10.0.1.12</div><div style="color:#4fd1c5;text-align:right">1</div><div style="display:flex;gap:8px;align-items:baseline"><span style="color:#35d07f;letter-spacing:-1px">⣀⣀⣠⣄⣀⣀⣀⣠⣀⣀</span><span style="color:#cbd5dd;font-size:12px">4ms</span></div><div style="color:#8b9aa6">attached · deploy.sh</div>
+        </div>
+
+        <div style="color:#35d07f">●</div><div style="color:#cbd5dd">web-03</div><div style="color:#5b6b7a">matt@10.0.1.13</div><div style="color:#3f4b52;text-align:right">·</div><div style="display:flex;gap:8px;align-items:baseline"><span style="color:#35d07f;letter-spacing:-1px">⣀⣠⣀⣀⣄⣀⣀⣀⣀⣠</span><span style="color:#8b9aa6;font-size:12px">6ms</span></div><div style="color:#5b6b7a">yesterday</div>
+        <div style="color:#35d07f">●</div><div style="color:#cbd5dd">db-01</div><div style="color:#5b6b7a">matt@10.0.1.14</div><div style="color:#4fd1c5;text-align:right">2</div><div style="display:flex;gap:8px;align-items:baseline"><span style="color:#35d07f;letter-spacing:-1px">⣀⣠⣤⣶⣤⣠⣀⣀⣠⣄</span><span style="color:#8b9aa6;font-size:12px">5ms</span></div><div style="color:#8b9aa6">pg_dump · 42m</div>
+        <div style="color:#35d07f">●</div><div style="color:#cbd5dd">db-02</div><div style="color:#5b6b7a">matt@10.0.1.15</div><div style="color:#3f4b52;text-align:right">·</div><div style="display:flex;gap:8px;align-items:baseline"><span style="color:#35d07f;letter-spacing:-1px">⣀⣀⣄⣀⣀⣠⣀⣀⣀⣀</span><span style="color:#8b9aa6;font-size:12px">7ms</span></div><div style="color:#5b6b7a">3d ago</div>
+        <div style="color:#35d07f">●</div><div style="color:#cbd5dd">cache-01</div><div style="color:#5b6b7a">matt@10.0.1.16</div><div style="color:#3f4b52;text-align:right">·</div><div style="display:flex;gap:8px;align-items:baseline"><span style="color:#35d07f;letter-spacing:-1px">⣀⣠⣤⣄⣀⣀⣀⣀⣠⣀</span><span style="color:#8b9aa6;font-size:12px">3ms</span></div><div style="color:#5b6b7a">1w ago</div>
+        <div style="color:#ef5f52">●</div><div style="color:#cbd5dd">edge-01</div><div style="color:#5b6b7a">matt@203.0.113.7</div><div style="color:#ef5f52;text-align:right">1</div><div style="color:#ef5f52;font-size:12px">unreachable 6m</div><div style="color:#8b9aa6">session saved · state unknown · <span style="color:#4fd1c5">⏎</span> reconnect</div>
+        <div style="color:#35d07f">●</div><div style="color:#cbd5dd">build-01</div><div style="color:#5b6b7a">matt@10.0.1.18</div><div style="color:#3f4b52;text-align:right">·</div><div style="display:flex;gap:8px;align-items:baseline"><span style="color:#35d07f;letter-spacing:-1px">⣀⣀⣀⣀⣠⣄⣀⣀⣀⣀</span><span style="color:#8b9aa6;font-size:12px">5ms</span></div><div style="color:#5b6b7a">5d ago</div>
+        <div style="color:#35d07f">●</div><div style="color:#cbd5dd">monitor-01</div><div style="color:#5b6b7a">matt@10.0.1.19</div><div style="color:#3f4b52;text-align:right">·</div><div style="display:flex;gap:8px;align-items:baseline"><span style="color:#35d07f;letter-spacing:-1px">⣀⣀⣀⣀⣀⣀⣠⣤⣄⣀</span><span style="color:#8b9aa6;font-size:12px">4ms</span></div><div style="color:#5b6b7a">2w ago</div>
+        <div style="color:#3f4b52">○</div><div style="color:#8b9aa6">staging-web-01</div><div style="color:#5b6b7a">matt@10.0.2.20</div><div style="color:#3f4b52;text-align:right">·</div><div style="color:#3f4b52;font-size:12px">offline</div><div style="color:#3f4b52">since 12:10</div>
+      </div>
+
+      <div style="margin-top:auto;display:flex;gap:20px;color:#3f4b52;font-size:12px;padding-top:12px">
+        <span><span style="color:#8b9aa6">⏎</span> connect</span>
+        <span><span style="color:#8b9aa6">a</span> add host</span>
+        <span><span style="color:#8b9aa6">e</span> edit</span>
+        <span><span style="color:#8b9aa6">/</span> filter</span>
+        <span><span style="color:#8b9aa6">?</span> help</span>
+        <span><span style="color:#8b9aa6">q</span> quit</span>
+        <span style="margin-left:auto">TMUX = saved sessions on that host · sessions keep running after quit</span>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ══════ 2 · SESSION ══════ -->
+    <sc-if data-condition="isSession">
+    <div style="flex:1;display:grid;grid-template-columns:1fr 300px;min-height:0">
+      <div style="padding:12px 18px;color:#cbd5dd;overflow:hidden;line-height:1.6">
+        <div style="color:#5b6b7a">Linux web-02 6.19.10-300.fc44.x86_64 x86_64 · last login Tue Sep 15 12:11 from 10.0.0.4</div>
+        <div style="height:8px"></div>
+        <div><span style="color:#35d07f">matt@web-02</span><span style="color:#3f4b52">:</span><span style="color:#4fd1c5">~</span><span style="color:#3f4b52">$</span> <span style="color:#8b9aa6">./deploy.sh --release 2.14.4</span></div>
+        <div>→ unpacking app-2.14.4.tar.gz</div>
+        <div>→ running migrations … none pending</div>
+        <div>→ reloading nginx</div>
+        <div style="color:#35d07f">✓ deployed 2.14.4 in 6.2s</div>
+        <div><span style="color:#35d07f">matt@web-02</span><span style="color:#3f4b52">:</span><span style="color:#4fd1c5">~</span><span style="color:#3f4b52">$</span> <span style="color:#8b9aa6">tail -n 3 /var/log/nginx/access.log</span></div>
+        <div style="color:#8b9aa6">10.0.0.4 - - [15/Sep/2026:12:24:58] "GET /health HTTP/1.1" 200 2</div>
+        <div style="color:#8b9aa6">10.0.0.9 - - [15/Sep/2026:12:25:01] "GET /api/v2/orders HTTP/1.1" 200 1843</div>
+        <div style="color:#8b9aa6">10.0.0.9 - - [15/Sep/2026:12:25:03] "POST /api/v2/orders HTTP/1.1" 201 412</div>
+        <div><span style="color:#35d07f">matt@web-02</span><span style="color:#3f4b52">:</span><span style="color:#4fd1c5">~</span><span style="color:#3f4b52">$</span> <span style="background:#4fd1c5;color:#080b0d">&nbsp;</span></div>
+      </div>
+
+      <!-- netwatch strip (prefix + m) -->
+      <div style="border-left:1px solid #1c2429;padding:10px 14px;display:flex;flex-direction:column;gap:14px;font-size:12px">
+        <div style="color:#4fd1c5;display:flex;justify-content:space-between"><span style="font-weight:700">web-02</span><span style="color:#5b6b7a">eth0</span></div>
+
+        <div>
+          <div style="display:flex;justify-content:space-between;color:#8b9aa6"><span style="color:#5b6b7a">RX</span><span style="color:#35d07f">8.4 MB/s</span></div>
+          <div style="color:#35d07f;font-size:15px;line-height:1;letter-spacing:-1px;white-space:nowrap;overflow:hidden">⣀⣠⣤⣶⣤⣠⣀⣠⣤⣤⣶⣿⣶⣤⣠⣀⣀⣠⣤⣶⣤⣠⣀⣀⣠⣤⣶</div>
+        </div>
+        <div>
+          <div style="display:flex;justify-content:space-between;color:#8b9aa6"><span style="color:#5b6b7a">TX</span><span style="color:#4fd1c5">1.2 MB/s</span></div>
+          <div style="color:#4fd1c5;font-size:15px;line-height:1;letter-spacing:-1px;white-space:nowrap;overflow:hidden">⣀⣀⣠⣄⣀⣀⣀⣠⣄⣀⣠⣤⣄⣀⣀⣀⣀⣀⣠⣄⣀⣀⣀⣀⣠⣄⣀</div>
+        </div>
+
+        <div style="height:1px;background:#14191d"></div>
+
+        <div style="display:grid;grid-template-columns:5ch 1fr 5ch;gap:6px 10px;align-items:center;color:#8b9aa6">
+          <span style="color:#5b6b7a">cpu</span><div style="height:6px;background:#14191d"><div style="width:12%;height:100%;background:#35d07f"></div></div><span style="text-align:right">12%</span>
+          <span style="color:#5b6b7a">mem</span><div style="height:6px;background:#14191d"><div style="width:46%;height:100%;background:#35d07f"></div></div><span style="text-align:right">46%</span>
+          <span style="color:#5b6b7a">disk</span><div style="height:6px;background:#14191d"><div style="width:24%;height:100%;background:#35d07f"></div></div><span style="text-align:right">24%</span>
+          <span style="color:#5b6b7a">rtt</span><span style="color:#35d07f;letter-spacing:-1px">⣀⣀⣠⣄⣀⣀⣀⣠⣀⣀⣀⣄⣀⣀</span><span style="text-align:right">4ms</span>
+        </div>
+
+        <div style="height:1px;background:#14191d"></div>
+
+        <div style="display:grid;grid-template-columns:1fr 6ch 6ch;gap:4px 8px;color:#8b9aa6">
+          <span style="color:#5b6b7a">PEER</span><span style="color:#5b6b7a;text-align:right">RX</span><span style="color:#5b6b7a;text-align:right">TX</span>
+          <span style="color:#cbd5dd">10.0.1.14:5432</span><span style="text-align:right">5.9M</span><span style="text-align:right">412k</span>
+          <span style="color:#cbd5dd">10.0.1.16:6379</span><span style="text-align:right">1.7M</span><span style="text-align:right">240k</span>
+          <span style="color:#cbd5dd">10.0.0.9:443</span><span style="text-align:right">612k</span><span style="text-align:right">380k</span>
+          <span style="color:#cbd5dd">10.0.0.4:22</span><span style="text-align:right">168k</span><span style="text-align:right">148k</span>
+        </div>
+
+        <div style="margin-top:auto;color:#3f4b52;font-size:11px"><span style="color:#8b9aa6">^A m</span> hide</div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ══════ 3 · SWITCHER (tmux popup) ══════ -->
+    <sc-if data-condition="isSwitch">
+    <div style="flex:1;display:grid;grid-template-columns:1fr 300px;min-height:0;position:relative">
+      <div style="padding:12px 18px;color:#3f4b52;overflow:hidden;line-height:1.6">
+        <div>Linux web-02 6.19.10-300.fc44.x86_64 x86_64 · last login Tue Sep 15 12:11 from 10.0.0.4</div>
+        <div style="height:8px"></div>
+        <div>matt@web-02:~$ ./deploy.sh --release 2.14.4</div>
+        <div>→ unpacking app-2.14.4.tar.gz</div>
+        <div>→ running migrations … none pending</div>
+        <div>→ reloading nginx</div>
+        <div>✓ deployed 2.14.4 in 6.2s</div>
+        <div>matt@web-02:~$ tail -n 3 /var/log/nginx/access.log</div>
+        <div>10.0.0.4 - - [15/Sep/2026:12:24:58] "GET /health HTTP/1.1" 200 2</div>
+        <div>10.0.0.9 - - [15/Sep/2026:12:25:01] "GET /api/v2/orders HTTP/1.1" 200 1843</div>
+        <div>10.0.0.9 - - [15/Sep/2026:12:25:03] "POST /api/v2/orders HTTP/1.1" 201 412</div>
+        <div>matt@web-02:~$</div>
+      </div>
+      <div style="border-left:1px solid #14191d"></div>
+
+      <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:560px;border:1px solid #4fd1c5;background:#080b0d;box-shadow:0 20px 60px -10px #000">
+        <div style="display:flex;justify-content:space-between;padding:8px 14px;border-bottom:1px solid #1c2429;color:#4fd1c5"><span style="font-weight:700">switch</span><span style="color:#5b6b7a">^A s</span></div>
+        <div style="padding:6px 0;display:grid;grid-template-columns:4ch 14ch 1fr 8ch;gap:4px 14px;align-items:center">
+          <div style="grid-column:1/-1;display:grid;grid-template-columns:4ch 14ch 1fr 8ch;gap:4px 14px;padding:3px 14px;background:#10171b;box-shadow:inset 2px 0 0 #4fd1c5"><span style="color:#4fd1c5;font-weight:700">1</span><span style="color:#fff">web-02</span><span style="color:#8b9aa6">deploy.sh</span><span style="color:#35d07f;text-align:right">here</span></div>
+          <div style="grid-column:1/-1;display:grid;grid-template-columns:4ch 14ch 1fr 8ch;gap:4px 14px;padding:3px 14px"><span style="color:#4fd1c5">2</span><span style="color:#cbd5dd">db-01</span><span style="color:#8b9aa6">pg_dump · 78%</span><span style="color:#5b6b7a;text-align:right">42m</span></div>
+          <div style="grid-column:1/-1;display:grid;grid-template-columns:4ch 14ch 1fr 8ch;gap:4px 14px;padding:3px 14px"><span style="color:#4fd1c5">3</span><span style="color:#cbd5dd">db-01</span><span style="color:#8b9aa6">bash</span><span style="color:#5b6b7a;text-align:right">idle 18m</span></div>
+          <div style="grid-column:1/-1;display:grid;grid-template-columns:4ch 14ch 1fr 8ch;gap:4px 14px;padding:3px 14px"><span style="color:#4fd1c5">4</span><span style="color:#cbd5dd">edge-01</span><span style="color:#ef5f52">unreachable · state unknown</span><span style="color:#5b6b7a;text-align:right">6m</span></div>
+          <div style="grid-column:1/-1;height:1px;background:#14191d;margin:4px 14px"></div>
+          <div style="grid-column:1/-1;display:grid;grid-template-columns:4ch 14ch 1fr 8ch;gap:4px 14px;padding:3px 14px"><span style="color:#5b6b7a">n</span><span style="color:#8b9aa6">new…</span><span style="color:#5b6b7a">pick a host</span><span></span></div>
+        </div>
+        <div style="padding:8px 14px;border-top:1px solid #1c2429;color:#3f4b52;font-size:12px;display:flex;gap:16px"><span><span style="color:#8b9aa6">1–9</span> jump</span><span><span style="color:#8b9aa6">⏎</span> switch</span><span><span style="color:#8b9aa6">x</span> kill</span><span><span style="color:#8b9aa6">Esc</span> close</span></div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ══════ 4 · HELP ══════ -->
+    <sc-if data-condition="isHelp">
+    <div style="flex:1;padding:14px 18px;display:flex;flex-direction:column">
+      <div style="color:#4fd1c5;font-weight:700;margin-bottom:6px">essh keys</div>
+      <div style="color:#5b6b7a;font-size:12px;margin-bottom:18px">essh is tmux underneath. essh overrides selected local tmux bindings. Remote prefix is Ctrl+B. Prefix is <span style="color:#4fd1c5">Ctrl+A</span>.</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:26px;font-size:12.5px">
+        <div>
+          <div style="color:#cbd5dd;margin-bottom:8px">HOST LIST</div>
+          <div style="display:grid;grid-template-columns:8ch 1fr;gap:5px 12px;color:#8b9aa6">
+            <span style="color:#4fd1c5">↑↓ jk</span><span>move</span>
+            <span style="color:#4fd1c5">⏎</span><span>connect (or reattach)</span>
+            <span style="color:#4fd1c5">/</span><span>filter</span>
+            <span style="color:#4fd1c5">a</span><span>add host</span>
+            <span style="color:#4fd1c5">e</span><span>edit host</span>
+            <span style="color:#4fd1c5">q</span><span>quit — sessions keep running</span>
+          </div>
+        </div>
+        <div>
+          <div style="color:#cbd5dd;margin-bottom:8px">IN A SESSION</div>
+          <div style="display:grid;grid-template-columns:8ch 1fr;gap:5px 12px;color:#8b9aa6">
+            <span style="color:#4fd1c5">^A 1–9</span><span>jump to session</span>
+            <span style="color:#4fd1c5">^A s</span><span>switcher</span>
+            <span style="color:#4fd1c5">^A n</span><span>new session on a host</span>
+            <span style="color:#4fd1c5">^A m</span><span>toggle netwatch strip</span>
+            <span style="color:#4fd1c5">^A d</span><span>back to host list</span>
+            <span style="color:#4fd1c5">^A x</span><span>kill this session</span>
+          </div>
+        </div>
+        <div>
+          <div style="color:#cbd5dd;margin-bottom:8px">STATUS BAR</div>
+          <div style="color:#8b9aa6;line-height:1.7">
+            <div><span style="color:#35d07f">●</span> reachable</div>
+            <div><span style="color:#ef5f52">●</span> unreachable, session saved</div>
+            <div><span style="color:#3f4b52">○</span> offline, no session</div>
+            <div style="margin-top:8px;color:#5b6b7a">Right side: current host's rx/tx and rtt. Nothing else.</div>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:auto;color:#3f4b52;font-size:12px"><span style="color:#8b9aa6">Esc</span> close</div>
+    </div>
+    </sc-if>
+
+    <!-- ══════ tmux status bar (every screen) ══════ -->
+    <div style="display:flex;align-items:center;height:26px;background:#0d1316;border-top:1px solid #1c2429;font-size:12px;padding:0 10px;gap:2px;white-space:nowrap">
+      <span style="color:#4fd1c5;font-weight:700;padding:0 8px 0 2px">essh</span>
+      <sc-if data-condition="isHosts"><span style="padding:0 8px;background:#4fd1c5;color:#080b0d">hosts</span></sc-if>
+      <sc-if data-condition="notHosts"><span style="padding:0 8px;color:#5b6b7a">hosts</span></sc-if>
+      <span style="padding:0 8px;color:#5b6b7a">│</span>
+      <sc-if data-condition="inSession"><span style="padding:0 8px;background:#10171b;color:#fff;border-bottom:2px solid #4fd1c5">1 web-02<span style="color:#35d07f"> ●</span></span></sc-if>
+      <sc-if data-condition="notInSession"><span style="padding:0 8px;color:#8b9aa6">1 web-02<span style="color:#35d07f"> ●</span></span></sc-if>
+      <span style="padding:0 8px;color:#8b9aa6">2 db-01<span style="color:#35d07f"> ●</span></span>
+      <span style="padding:0 8px;color:#8b9aa6">3 db-01<span style="color:#35d07f"> ●</span></span>
+      <span style="padding:0 8px;color:#8b9aa6">4 edge-01<span style="color:#ef5f52"> ●</span></span>
+      <span style="margin-left:auto;display:flex;gap:16px;color:#5b6b7a">
+        <span data-metrics><span style="color:#35d07f">↓</span> 8.4M <span style="color:#4fd1c5">↑</span> 1.2M</span>
+        <span data-metrics>rtt 4ms</span>
+        <span style="color:#8b9aa6">12:25</span>
+      </span>
+    </div>
+  </div>
+
+  <!-- notes -->
+  <div style="width:1180px;display:grid;grid-template-columns:1fr 1fr;gap:20px;font-size:12.5px;line-height:1.55">
+    <div style="border:1px solid #1c2429;padding:16px 18px">
+      <div style="color:#4fd1c5;font-size:11px;letter-spacing:.16em;margin-bottom:10px">WHAT IT IS</div>
+      <div style="color:#8b9aa6;display:flex;flex-direction:column;gap:7px">
+        <div><span style="color:#cbd5dd">tmux does the work.</span> Each local window attaches to an independent, named remote tmux session. Detach, reconnect, quit — tmux already handles all of it. essh adds a host list, a switcher, and a skinned status bar.</div>
+        <div><span style="color:#cbd5dd">Two screens.</span> Host list and session. The switcher is a tmux popup; help is one page. Nothing else.</div>
+        <div><span style="color:#cbd5dd">Netwatch skin.</span> Square borders, one accent (cyan), green for traffic and health, red only for unreachable. rx/tx braille graphs and a per-peer table in the optional side strip.</div>
+        <div><span style="color:#cbd5dd">Health is three bars and a ping.</span> cpu / mem / disk / rtt in the strip; a dot per host in the list and status bar. No thresholds, no verdicts, no fleet views.</div>
+      </div>
+    </div>
+    <div style="border:1px solid #1c2429;padding:16px 18px">
+      <div style="color:#ef5f52;font-size:11px;letter-spacing:.16em;margin-bottom:10px">REMOVED VS V2</div>
+      <div style="color:#8b9aa6;display:flex;flex-direction:column;gap:7px">
+        <div>Health dashboard, "needs attention", host cards, busiest-processes list, reachability panel.</div>
+        <div>Broadcast, activity log, quick-connect panel, command palette, config screen.</div>
+        <div>File browser and port forwards — use <span style="color:#cbd5dd">scp</span> / <span style="color:#cbd5dd">ssh -L</span> inside the session; can return later as tmux popups.</div>
+        <div>Numbered btop panels, meters with gradient ramps, six function keys. Down to <span style="color:#cbd5dd">12 keys</span> total, with explicit local bindings.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</x-dc>
+<script>
+function show(screen) {
+  const values = {
+    isHosts: screen === 'hosts', notHosts: screen !== 'hosts',
+    isSession: screen === 'session', isSwitch: screen === 'switch', isHelp: screen === 'help',
+    inSession: ['session', 'switch'].includes(screen),
+    notInSession: !['session', 'switch'].includes(screen)
+  };
+  document.querySelectorAll('[data-metrics]').forEach(el => { el.hidden = !values.inSession; });
+  document.querySelectorAll('[data-condition]').forEach(el => { el.hidden = !values[el.dataset.condition]; });
+  document.querySelectorAll('[data-screen]').forEach(el => el.setAttribute('aria-pressed', String(el.dataset.screen === screen)));
+}
+document.querySelectorAll('[data-screen]').forEach(el => el.addEventListener('click', () => show(el.dataset.screen)));
+show('hosts');
+</script>
+</body>
+</html>
