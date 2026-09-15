@@ -6,14 +6,15 @@ and remote tmux on the hosts you connect to.
 
 - Hosts come from SSH configuration, essh configuration, and the existing host cache.
 - Enter connects; Ctrl+A s switches sessions; Ctrl+A n opens another.
-- F1 opens Help; F2 opens the full Health dashboard; F3 opens Sessions.
+- F1 opens Help; F2 cycles strip → half health → full health → terminal; F3 opens Sessions.
 - F4 returns to the main menu; F5/F6 switch to the previous/next session.
 - Click session tabs and navigation controls, or use the keyboard.
 - In Health: Tab changes panel, arrows/wheel scroll, i selects an interface,
   c/m sorts processes, Left/Right browses hosts, and b cycles the side mode.
 - Ctrl+A m cycles strip → half-width health → off; Ctrl+A h opens full health.
 - h on Hosts opens health for the selected host, including disconnected hosts.
-- F2 or Esc closes Health and returns to the terminal.
+- F2 from full health returns to the terminal with side health off.
+- Esc closes full health and restores the previous side view.
 - q on hosts (or Ctrl+A q in a session) detaches without ending remote work.
 - Ctrl+A x confirms before terminating a remote session.
 - Ctrl+B reaches remote tmux; Ctrl+A is the local prefix.

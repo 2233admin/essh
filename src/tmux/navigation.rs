@@ -26,7 +26,7 @@ pub const BINDINGS: &[Binding] = &[
         number: 2,
         label: "Health",
         command: "health",
-        description: "Full health dashboard; F2 or Esc returns to terminal",
+        description: "Cycle terminal → strip → half → full → terminal",
     },
     Binding {
         number: 3,
@@ -95,7 +95,16 @@ pub fn configure() -> Result<()> {
     call(&["set-option", "-g", "status-format[1]", &bar])?;
     for b in BINDINGS {
         let key = format!("F{}", b.number);
-        if b.number <= 3 {
+        if b.number == 2 {
+            call(&[
+                "bind-key",
+                "-n",
+                &key,
+                "run-shell",
+                "-b",
+                &helper(&["navigate", "cycle-health"])?,
+            ])?;
+        } else if b.number <= 3 {
             call(&[
                 "bind-key",
                 "-n",
@@ -168,8 +177,35 @@ pub fn cycle(direction: i32) -> Result<Option<Window>> {
     call(&["set-option", "-g", "@essh_last", &ws[next].id])?;
     Ok(Some(ws[next].clone()))
 }
+/// Returns true when the next step is the full-page popup.
+pub fn cycle_health() -> Result<bool> {
+    let Some(w) = current()? else {
+        return Ok(true);
+    };
+    select(&w.target)?;
+    let width: u16 =
+        call(&["display-message", "-p", "-t", &w.target, "#{window_width}"])?.parse()?;
+    if width < 80 || side_mode() == 2 {
+        return Ok(true);
+    }
+    toggle(&w.target)?;
+    Ok(false)
+}
+pub fn health_off() -> Result<()> {
+    call(&["set-option", "-g", "@essh_side_mode", "0"])?;
+    if let Some(w) = current()? {
+        sync_side(&w.target)?;
+    }
+    Ok(())
+}
 pub fn run(command: &str) -> Result<()> {
     match command {
+        "cycle-health" => {
+            if cycle_health()? {
+                run("health")?;
+            }
+            Ok(())
+        }
         "hosts" => main_menu(),
         "previous" => {
             cycle(-1)?;

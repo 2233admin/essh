@@ -451,7 +451,7 @@ pub fn strip(id: &str) -> Result<()> {
                     DIM,
                 );
             }
-            line(f, r[8], "^A m half · ^A h / F2 full", DIM);
+            line(f, r[8], "F2 half · ^A h full", DIM);
         })?;
         let _ = key()?;
     }

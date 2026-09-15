@@ -486,6 +486,10 @@ fn option(window: &str, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 pub fn select(window: &str) -> Result<()> {
+    // Selecting the active window again unnecessarily fires the side-view hook.
+    if call(&["display-message", "-p", "-t", window, "#{window_active}"])? == "1" {
+        return Ok(());
+    }
     call(&["select-window", "-t", window])?;
     Ok(())
 }
@@ -689,6 +693,15 @@ fn toggle(window: &str) -> Result<()> {
     sync_side(window)
 }
 fn sync_side(window: &str) -> Result<()> {
+    // Hooks and explicit keys can arrive together. Serialize pane mutations;
+    // the OS releases the lock even if a helper is terminated.
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(root().join("side-view.lock"))?;
+    lock.lock()?;
     let Some(w) = windows()?.into_iter().find(|w| w.target == window) else {
         return Ok(());
     };

@@ -41,7 +41,7 @@ Existing explicit CLI commands remain available during migration.
 | Key | Action |
 | --- | --- |
 | F1 | Contextual help; F1 or Esc returns |
-| F2 | Full health dashboard; F2 or Esc returns to the terminal |
+| F2 | Cycle terminal → strip → half → full → terminal |
 | F3 | Session switcher |
 | F4 | Main menu (Hosts), keeping remote sessions running |
 | F5 / F6 | Previous / next SSH session, wrapping and skipping Hosts |
@@ -72,7 +72,8 @@ session switches. Ctrl+A h opens full health. h on Hosts opens the selected host
 
 ## Full health dashboard
 
-F2 opens a full-size local popup, leaving the remote terminal running. Its
+F2 cycles the active session through strip, half-width, full health, then terminal.
+Ctrl+A h opens full health directly. The full-size popup leaves the remote terminal running. Its
 header identifies the host, session, connection state and sample age. F5/F6 and
 session-tab clicks change the host without mixing the previous host's readings.
 Without a session, Health directs the user to connect from the main menu.
@@ -96,7 +97,7 @@ Panels:
 
 Tab/Shift+Tab focuses a panel. Arrows or the mouse wheel scroll it. At 100+
 columns and sufficient height the panels form three rows. Smaller terminals use
-selectable panels, including at 60×20. F2/Esc returns to the shell; b cycles the side mode and returns to the shell. Side views require an
+selectable panels, including at 60×20. F2 returns to the shell with side health off; Esc restores the previous side view; b cycles the side mode and returns to the shell. Side views require an
 80-column window; narrower windows retain F2 full health.
 
 Process CPU is the lifetime average reported by ps, not instantaneous CPU.
@@ -169,3 +170,5 @@ regions. The standalone HTML is a design reference containing sample data.
   previous dashboard controls where the prototype assigns conflicting keys.
 - Existing remote shells own their prompt, cursor, Ctrl+C and Ctrl+L behavior.
   Browser prefix emulation and canned shell output are not installed in the app.
+
+Below 80 columns, F2 skips side modes and opens full health directly.

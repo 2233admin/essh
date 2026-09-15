@@ -299,10 +299,26 @@ pub fn run(mut config: AppConfig, initial: View, popup: bool, new_session: bool)
             continue;
         };
         state.message.clear();
-        let key = if key == KeyCode::Char('h') && view == View::Hosts && !state.filtering {
-            KeyCode::F(2)
-        } else if matches!(key, KeyCode::Char('?' | 'q')) && view == View::Help {
+        if key == KeyCode::Char('h') && view == View::Hosts && !state.filtering {
+            if !popup {
+                navigation::run("health")?;
+                continue;
+            }
+            health_host = shown.get(state.selected).cloned();
+            session = health_host.as_ref().and_then(|h| host_window(h, &ws));
+            if let Some(w) = &session {
+                select(&w.target)?;
+            }
+            view = View::Health;
+            continue;
+        }
+        let key = if matches!(key, KeyCode::Char('?' | 'q')) && view == View::Help {
             KeyCode::Esc
+        } else {
+            key
+        };
+        let key = if key == KeyCode::Enter && view == View::Help {
+            KeyCode::F(navigation::BINDINGS[state.focus].number)
         } else {
             key
         };
@@ -333,10 +349,11 @@ pub fn run(mut config: AppConfig, initial: View, popup: bool, new_session: bool)
                 }
                 2 => {
                     if !popup && view != View::Health {
-                        navigation::run("health")?;
+                        navigation::run("cycle-health")?;
                         continue;
                     }
                     if view == View::Health {
+                        navigation::health_off()?;
                         if popup {
                             return Ok(());
                         }
@@ -345,6 +362,9 @@ pub fn run(mut config: AppConfig, initial: View, popup: bool, new_session: bool)
                             select(&w.target)?;
                         }
                     } else {
+                        if !navigation::cycle_health()? {
+                            return Ok(());
+                        }
                         health_host = if view == View::Hosts {
                             shown.get(state.selected).cloned()
                         } else {
@@ -616,38 +636,7 @@ pub fn run(mut config: AppConfig, initial: View, popup: bool, new_session: bool)
             }
             KeyCode::Char('c') if view == View::Health => state.memory_sort = false,
             KeyCode::Char('m') if view == View::Health => state.memory_sort = true,
-            KeyCode::Enter if view == View::Help => {
-                let b = &navigation::BINDINGS[state.focus];
-                match b.number {
-                    1 => (),
-                    2 => {
-                        session = navigation::current()?;
-                        view = if session.is_some() {
-                            View::Health
-                        } else {
-                            View::Hosts
-                        };
-                    }
-                    3 => view = View::Sessions,
-                    4 => {
-                        navigation::main_menu()?;
-                        if popup {
-                            return Ok(());
-                        }
-                        view = View::Hosts;
-                    }
-                    5 | 6 => {
-                        session = navigation::cycle(if b.number == 5 { -1 } else { 1 })?;
-                        health_host = session
-                            .as_ref()
-                            .and_then(|w| host_list.iter().find(|h| h.name == w.host).cloned());
-                        if popup {
-                            return Ok(());
-                        }
-                    }
-                    _ => (),
-                }
-            }
+
             _ => (),
         }
     }
@@ -971,7 +960,7 @@ fn draw_help(f: &mut Frame, r: Rect, s: &State) {
             b.description
         ));
     }
-    text.push_str("\nMOUSE\nClick session tabs to switch. Click navigation buttons for views.\nClick rows to select; double-click connects/switches.\nWheel scrolls; click panes to focus; drag dividers to resize.\nUse your terminal's selection override (Shift-drag in Ghostty) to select text.\n\nSESSIONS\nEnter connects or reconnects. F3 then n creates another session.\nF4 Main returns to hosts; q there quits essh and keeps jobs running.\nx in Sessions closes a remote session after explicit confirmation.\nSaved/disconnected does not guarantee remote jobs are alive.\n\nHEALTH\nF2 full dashboard; F2/Esc returns to the terminal.\nF5/F6 or session tabs change the session. Left/Right browses hosts.\nh on Hosts opens health for the selected host, including offline hosts.\nTab selects a panel; arrows/wheel scroll it. i cycles interfaces.\nc/m sorts processes by CPU/memory. b shows the side strip.\n— means unavailable; stale samples show their age.\nNetwork and disk rates are bytes/s; process CPU is ps lifetime average.\nCPU graphs: 0–100%; RTT: 0–50ms; traffic: max with 60% headroom.\n\nSPLITS ON THE REMOTE HOST\nCtrl+B, release, then % splits side by side; \" splits top/bottom.\nCtrl+B then arrow changes remote pane. Local Ctrl+A splits open local shells.\n\nADVANCED TMUX\nLocal prefix Ctrl+A; remote prefix Ctrl+B.\nCtrl+A then 1–9 session; s switcher; d main; q detach.\nCtrl+A, release, then lowercase m cycles strip / half / off.\nMode follows you between sessions. Ctrl+A h opens full health.\nCtrl+A then v sends the next key directly to the remote terminal,\nincluding reserved F1–F6. Ctrl+A twice sends a literal Ctrl+A.\nEsc and Ctrl+C in the terminal still go to your remote program.\n");
+    text.push_str("\nMOUSE\nClick session tabs to switch. Click navigation buttons for views.\nClick rows to select; double-click connects/switches.\nWheel scrolls; click panes to focus; drag dividers to resize.\nUse your terminal's selection override (Shift-drag in Ghostty) to select text.\n\nSESSIONS\nEnter connects or reconnects. F3 then n creates another session.\nF4 Main returns to hosts; q there quits essh and keeps jobs running.\nx in Sessions closes a remote session after explicit confirmation.\nSaved/disconnected does not guarantee remote jobs are alive.\n\nHEALTH\nF2 cycles terminal → strip → half → full → terminal.\nEsc closes full health and restores the previous side view.\nCtrl+A h opens full health directly.\nF5/F6 or session tabs change the session. Left/Right browses hosts.\nh on Hosts opens health for the selected host, including offline hosts.\nTab selects a panel; arrows/wheel scroll it. i cycles interfaces.\nc/m sorts processes by CPU/memory. b shows the side strip.\n— means unavailable; stale samples show their age.\nNetwork and disk rates are bytes/s; process CPU is ps lifetime average.\nCPU graphs: 0–100%; RTT: 0–50ms; traffic: max with 60% headroom.\n\nSPLITS ON THE REMOTE HOST\nCtrl+B, release, then % splits side by side; \" splits top/bottom.\nCtrl+B then arrow changes remote pane. Local Ctrl+A splits open local shells.\n\nADVANCED TMUX\nLocal prefix Ctrl+A; remote prefix Ctrl+B.\nCtrl+A then 1–9 session; s switcher; d main; q detach.\nCtrl+A, release, then lowercase m cycles strip / half / off.\nMode follows you between sessions. Ctrl+A h opens full health.\nCtrl+A then v sends the next key directly to the remote terminal,\nincluding reserved F1–F6. Ctrl+A twice sends a literal Ctrl+A.\nEsc and Ctrl+C in the terminal still go to your remote program.\n");
     f.render_widget(
         Paragraph::new(text)
             .wrap(Wrap { trim: false })
@@ -1027,7 +1016,7 @@ pub(crate) fn half(id: &str) -> Result<()> {
                 line(
                     f,
                     rows[1],
-                    "Disconnected · last reading, not live · F2 reconnect",
+                    "Disconnected · last reading, not live · F2 full health",
                     DIM,
                 );
             }
