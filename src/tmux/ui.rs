@@ -1,6 +1,6 @@
 use super::*;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
 };
@@ -8,11 +8,10 @@ use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Gauge, Paragraph, Row, Table, TableState, Wrap},
 };
+use std::time::Instant;
 use std::{
     collections::HashMap,
     net::{TcpStream, ToSocketAddrs},
-    sync::mpsc,
-    time::Instant,
 };
 
 const BG: Color = Color::Rgb(8, 11, 13);
@@ -30,6 +29,7 @@ struct Screen {
 impl Screen {
     fn new() -> Result<Self> {
         enable_raw_mode()?;
+        io::stdout().execute(EnableMouseCapture)?;
         if let Err(e) = io::stdout().execute(EnterAlternateScreen) {
             let _ = disable_raw_mode();
             return Err(e.into());
@@ -47,6 +47,7 @@ impl Screen {
 impl Drop for Screen {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
+        let _ = io::stdout().execute(DisableMouseCapture);
         let _ = io::stdout().execute(LeaveAlternateScreen);
         let _ = self.term.show_cursor();
     }
@@ -129,295 +130,9 @@ struct Probe {
     checked: bool,
 }
 
-pub fn hosts(mut config: AppConfig, new: bool) -> Result<()> {
-    let mut screen = Screen::new()?;
-    let mut list = super::hosts(&config);
-    let mut probes: HashMap<String, Probe> = HashMap::new();
-    let (tx, rx) = mpsc::channel::<Option<(String, Option<f64>)>>();
-    let mut probe_inflight = false;
-    let mut next = Instant::now();
-    let mut selected = 0;
-    let mut filter = String::new();
-    let mut filtering = false;
-    let mut message = String::new();
-    let mut table_state = TableState::default();
-    let mut session_windows = windows().unwrap_or_default();
-    let mut refreshed = Instant::now();
-    loop {
-        while let Ok(result) = rx.try_recv() {
-            match result {
-                Some((name, latency)) => {
-                    if let Ok(bytes) =
-                        serde_json::to_vec(&(chrono::Utc::now().timestamp(), latency))
-                    {
-                        let _ = fs::write(probe_path(&name), bytes);
-                    }
-                    for w in session_windows
-                        .iter()
-                        .filter(|w| w.host == name && w.state != "connected")
-                    {
-                        let dot = if latency.is_some() {
-                            "#[fg=#35d07f]●#[default]"
-                        } else {
-                            "#[fg=#ef5f52]●#[default]"
-                        };
-                        let _ = option(&w.target, "@essh_dot", dot);
-                    }
-                    let p: &mut Probe = probes.entry(name).or_default();
-                    p.latency = latency;
-                    p.checked = true;
-                    if let Some(ms) = latency {
-                        p.history.push(ms as u64);
-                        if p.history.len() > 10 {
-                            p.history.remove(0);
-                        }
-                    }
-                }
-                None => {
-                    probe_inflight = false;
-                    next = Instant::now() + Duration::from_secs(5);
-                }
-            }
-        }
-        if !probe_inflight && Instant::now() >= next {
-            probe_inflight = true;
-            let hosts = list.clone();
-            let tx = tx.clone();
-            std::thread::spawn(move || {
-                // Bounded parallelism, never one thread per configured host.
-                for chunk in hosts.chunks(8) {
-                    std::thread::scope(|scope| {
-                        for h in chunk {
-                            let tx = tx.clone();
-                            scope.spawn(move || {
-                                let _ = tx.send(Some((h.name.clone(), tcp_latency(h))));
-                            });
-                        }
-                    });
-                }
-                let _ = tx.send(None);
-            });
-        }
-        if refreshed.elapsed() > Duration::from_secs(1) {
-            session_windows = windows().unwrap_or_default();
-            refreshed = Instant::now();
-        }
-        let query = filter.to_lowercase();
-        let shown: Vec<_> = list
-            .iter()
-            .filter(|h| {
-                format!("{} {}", h.name, h.tags)
-                    .to_lowercase()
-                    .contains(&query)
-            })
-            .collect();
-        selected = selected.min(shown.len().saturating_sub(1));
-        table_state.select(if shown.is_empty() {
-            None
-        } else {
-            Some(selected)
-        });
-        screen.term.draw(|f| {
-            background(f);
-            let area = main_layout(f.area());
-            line(
-                f,
-                area[0],
-                format!(
-                    "essh │ {} hosts · {} sessions{}",
-                    list.len(),
-                    session_windows.len(),
-                    if new { " · new session" } else { "" }
-                ),
-                CYAN,
-            );
-            let wide = area[1].width >= 105;
-            let medium = area[1].width >= 65;
-            let rows = shown.iter().map(|h| {
-                let p = probes.get(&h.name);
-                let sessions: Vec<_> = session_windows
-                    .iter()
-                    .filter(|w| w.host == h.name)
-                    .collect();
-                let connected = sessions.iter().any(|w| w.state == "connected");
-                let reachable = connected || p.is_some_and(|p| p.latency.is_some());
-                let color = if reachable {
-                    GREEN
-                } else if !sessions.is_empty() {
-                    RED
-                } else {
-                    DIM
-                };
-                let dot = if reachable || !sessions.is_empty() {
-                    "●"
-                } else {
-                    "○"
-                };
-                let latency = if h.proxy {
-                    if connected {
-                        "via SSH".into()
-                    } else {
-                        "via proxy · unknown".into()
-                    }
-                } else if let Some(ms) = p.and_then(|p| p.latency) {
-                    format!("{} {ms:.0}ms", spark(&p.unwrap().history, 10))
-                } else if p.is_some_and(|p| p.checked) {
-                    if sessions.is_empty() {
-                        "offline".into()
-                    } else {
-                        "unreachable".into()
-                    }
-                } else {
-                    "checking…".into()
-                };
-                let last: String = if sessions.is_empty() {
-                    "—".into()
-                } else if connected {
-                    sessions
-                        .iter()
-                        .filter_map(|w| metrics::read(&w.id))
-                        .find_map(|m| m.running)
-                        .unwrap_or_else(|| "attached".into())
-                } else {
-                    "session saved · state unknown".into()
-                };
-                let mut cells = vec![
-                    ratatui::widgets::Cell::from(dot).style(Style::default().fg(color)),
-                    ratatui::widgets::Cell::from(h.name.clone()),
-                ];
-                if wide {
-                    cells.push(
-                        ratatui::widgets::Cell::from(format!(
-                            "{}@{}",
-                            h.user.as_deref().unwrap_or("—"),
-                            h.hostname
-                        ))
-                        .style(Style::default().fg(DIM)),
-                    );
-                }
-                cells.push(
-                    ratatui::widgets::Cell::from(if sessions.is_empty() {
-                        "·".into()
-                    } else {
-                        sessions.len().to_string()
-                    })
-                    .style(Style::default().fg(CYAN)),
-                );
-                cells.push(ratatui::widgets::Cell::from(latency).style(Style::default().fg(color)));
-                if medium {
-                    cells.push(ratatui::widgets::Cell::from(last).style(Style::default().fg(DIM)));
-                }
-                Row::new(cells)
-            });
-            let mut widths = vec![
-                Constraint::Length(1),
-                Constraint::Length(if medium { 16 } else { 14 }),
-            ];
-            let mut headers = vec!["", "HOST"];
-            if wide {
-                widths.push(Constraint::Length(24));
-                headers.push("USER@ADDRESS");
-            }
-            widths.push(Constraint::Length(5));
-            headers.push("TMUX");
-            widths.push(if medium {
-                Constraint::Length(18)
-            } else {
-                Constraint::Min(1)
-            });
-            headers.push("LATENCY");
-            if medium {
-                widths.push(Constraint::Min(1));
-                headers.push("LAST");
-            }
-            let table = Table::new(rows, widths)
-                .header(
-                    Row::new(headers)
-                        .style(Style::default().fg(DIM))
-                        .bottom_margin(1),
-                )
-                .column_spacing(2)
-                .row_highlight_style(Style::default().bg(SELECTED).fg(Color::White).bold())
-                .highlight_symbol(Span::styled("▌", Style::default().fg(CYAN)));
-            f.render_stateful_widget(table, area[1], &mut table_state);
-            let footer = if filtering {
-                format!("/ {filter}   Esc clears · Enter finishes")
-            } else if !message.is_empty() {
-                message.clone()
-            } else if list.is_empty() {
-                "No hosts. a add host · ? help · q quit".into()
-            } else {
-                "⏎ connect · a add · e edit · / filter · ? help · q quit".into()
-            };
-            f.render_widget(
-                Paragraph::new(footer)
-                    .style(Style::default().fg(DIM))
-                    .wrap(Wrap { trim: false }),
-                area[2],
-            );
-        })?;
-        match key()? {
-            Some(KeyCode::Esc) if filtering => {
-                filter.clear();
-                filtering = false;
-            }
-            Some(KeyCode::Enter) if filtering => {
-                filtering = false;
-            }
-            Some(KeyCode::Backspace) if filtering => {
-                filter.pop();
-                selected = 0;
-            }
-            Some(KeyCode::Char(c)) if filtering => {
-                filter.push(c);
-                selected = 0;
-            }
-            Some(KeyCode::Char('/')) => filtering = true,
-            Some(KeyCode::Down | KeyCode::Char('j')) => {
-                selected = (selected + 1).min(shown.len().saturating_sub(1))
-            }
-            Some(KeyCode::Up | KeyCode::Char('k')) => selected = selected.saturating_sub(1),
-            Some(KeyCode::Char('q') | KeyCode::Esc) => {
-                if new {
-                    return Ok(());
-                }
-                call(&["detach-client"])?;
-            }
-            Some(KeyCode::Char('?')) => {
-                drop(screen);
-                help()?;
-                screen = Screen::new()?;
-            }
-            Some(KeyCode::Enter) => {
-                if let Some(h) = shown.get(selected) {
-                    match open(h, new) {
-                        Ok(()) => {
-                            if new {
-                                return Ok(());
-                            }
-                            message.clear();
-                        }
-                        Err(e) => message = e.to_string(),
-                    }
-                }
-            }
-            Some(KeyCode::Char(c @ ('a' | 'e'))) => {
-                let original = if c == 'e' {
-                    shown.get(selected).map(|h| (*h).clone())
-                } else {
-                    None
-                };
-                drop(screen);
-                // Both paths can add a new alias or update the selected alias;
-                // the form asks for the name explicitly and preserves other fields.
-                let result = host_form(&mut config, original.as_ref());
-                screen = Screen::new()?;
-                message = result.err().map(|e| e.to_string()).unwrap_or_default();
-                list = super::hosts(&config);
-            }
-            _ => (),
-        }
-    }
+pub(super) mod workspace;
+pub fn hosts(config: AppConfig, new: bool) -> Result<()> {
+    workspace::run(config, navigation::View::Hosts, new, new)
 }
 
 fn host_form(config: &mut AppConfig, original: Option<&Host>) -> Result<()> {
@@ -528,111 +243,10 @@ fn host_form(config: &mut AppConfig, original: Option<&Host>) -> Result<()> {
 }
 
 pub fn switcher() -> Result<()> {
-    let mut screen = Screen::new()?;
-    let mut selected = 0;
-    let mut state = TableState::default();
-    let mut message = String::new();
-    loop {
-        let ws = windows()?;
-        selected = selected.min(ws.len().saturating_sub(1));
-        state.select(if ws.is_empty() { None } else { Some(selected) });
-        screen.term.draw(|f| {
-            background(f);
-            let area = main_layout(f.area());
-            line(f, area[0], "switch", CYAN);
-            let rows = ws.iter().map(|w| {
-                Row::new([
-                    w.index.clone(),
-                    w.host.clone(),
-                    w.state.clone(),
-                    if w.active {
-                        "here".into()
-                    } else {
-                        String::new()
-                    },
-                ])
-            });
-            f.render_stateful_widget(
-                Table::new(
-                    rows,
-                    [
-                        Constraint::Length(4),
-                        Constraint::Length(16),
-                        Constraint::Min(1),
-                        Constraint::Length(5),
-                    ],
-                )
-                .column_spacing(1)
-                .highlight_symbol(Span::styled("▌", Style::default().fg(CYAN)))
-                .row_highlight_style(Style::default().bg(SELECTED).fg(CYAN)),
-                area[1],
-                &mut state,
-            );
-            line(
-                f,
-                area[2],
-                if message.is_empty() {
-                    "1–9 jump · ⏎ switch · n new · x kill · Esc close".into()
-                } else {
-                    message.clone()
-                },
-                DIM,
-            );
-        })?;
-        match key()? {
-            Some(KeyCode::Esc) => return Ok(()),
-            Some(KeyCode::Down | KeyCode::Char('j')) => {
-                selected = (selected + 1).min(ws.len().saturating_sub(1))
-            }
-            Some(KeyCode::Up | KeyCode::Char('k')) => selected = selected.saturating_sub(1),
-            Some(KeyCode::Char(c @ '1'..='9')) => {
-                if let Some(w) = ws.iter().find(|w| w.index == c.to_string()) {
-                    select(&w.target)?;
-                    return Ok(());
-                }
-            }
-            Some(KeyCode::Enter) => {
-                if let Some(w) = ws.get(selected) {
-                    select(&w.target)?;
-                    return Ok(());
-                }
-            }
-            Some(KeyCode::Char('n')) => {
-                drop(screen);
-                return hosts(AppConfig::load()?, true);
-            }
-            Some(KeyCode::Char('x')) => {
-                if let Some(w) = ws.get(selected) {
-                    drop(screen);
-                    message = kill(&w.target)
-                        .err()
-                        .map(|e| e.to_string())
-                        .unwrap_or_default();
-                    screen = Screen::new()?;
-                }
-            }
-            _ => (),
-        }
-    }
+    workspace::run(AppConfig::load()?, navigation::View::Sessions, true, false)
 }
-
 pub fn help() -> Result<()> {
-    let mut screen = Screen::new()?;
-    let mut scroll = 0u16;
-    loop {
-        screen.term.draw(|f| {
-            background(f);let r=main_layout(f.area());line(f,r[0],"essh keys",CYAN);
-            f.render_widget(Paragraph::new("HOST LIST\n↑↓ jk  move     Enter  connect or reattach\n/  filter      a  add host     e  edit host\nq  quit; sessions keep running\n\nF2  toggle health strip (no prefix)\n\nIN A SESSION — prefix Ctrl+A\n1–9  jump      s  switcher     n  new session\nm  strip       d  hosts        x  kill (confirmed)\nq  detach      ?  help         Ctrl+A  send prefix\n\nRemote tmux keeps its Ctrl+B prefix. Local essh shortcuts\nreplace some defaults; other tmux bindings remain available.\n\n● reachable  ● unreachable with saved session  ○ offline\nA saved session does not prove remote programs are alive.\nMetrics: current host only; hosts screen shows the clock.\nStrip: all non-loopback interfaces; TCP peer rates when available.")
-                .style(Style::default().fg(TEXT)).wrap(Wrap{trim:false}).scroll((scroll, 0)),r[1]);
-            line(f,r[2],"↑↓ scroll · Esc close",DIM);
-        })?;
-        match key()? {
-            Some(KeyCode::Esc | KeyCode::Char('q')) => return Ok(()),
-            Some(KeyCode::Down | KeyCode::Char('j')) => scroll = scroll.saturating_add(1).min(30),
-            Some(KeyCode::Up | KeyCode::Char('k')) => scroll = scroll.saturating_sub(1),
-            _ => (),
-        }
-    }
+    workspace::run(AppConfig::load()?, navigation::View::Help, true, false)
 }
 
 pub fn strip(id: &str) -> Result<()> {
@@ -643,7 +257,7 @@ pub fn strip(id: &str) -> Result<()> {
         screen.term.draw(|f| {
             background(f);
             if f.area().width < 26 {
-                line(f, f.area(), "Resize or F2 hide", DIM);
+                line(f, f.area(), "Resize · ^A m hide", DIM);
                 return;
             }
             let inner = f.area().inner(Margin::new(1, 1));
@@ -742,7 +356,7 @@ pub fn strip(id: &str) -> Result<()> {
             } else {
                 line(f, r[1], "Metrics unavailable", DIM);
             }
-            line(f, r[8], "F2 hide", DIM);
+            line(f, r[8], "^A m hide · F2 Health", DIM);
         })?;
         let _ = key()?;
     }

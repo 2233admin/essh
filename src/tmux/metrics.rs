@@ -1,6 +1,7 @@
 use super::*;
 use std::{
     collections::BTreeMap,
+    os::unix::process::CommandExt,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -9,7 +10,10 @@ use std::{
 };
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Snapshot {
+    pub details: super::details::Details,
+    pub error: Option<String>,
     pub at: i64,
     pub running: Option<String>,
     pub rx: Option<f64>,
@@ -28,6 +32,13 @@ impl Snapshot {
     }
 }
 pub fn read(id: &str) -> Option<Snapshot> {
+    if valid_id(id) && health_lease(id) {
+        if let Ok(bytes) = fs::read(root().join(format!("{id}.health"))) {
+            if let Ok(s) = serde_json::from_slice(&bytes) {
+                return Some(s);
+            }
+        }
+    }
     if !valid_id(id) {
         return None;
     }
@@ -62,7 +73,23 @@ fn parse(raw: &str) -> Counters {
     let mut mem_available = None;
     let mut socket: Option<(String, String)> = None;
     for line in raw.lines() {
-        if ["NET", "CPU", "MEM", "DISK", "PEERS", "RUNNING"].contains(&line) {
+        if [
+            "NET",
+            "CPU",
+            "MEM",
+            "DISK",
+            "PEERS",
+            "RUNNING",
+            "OS",
+            "UPTIME",
+            "LOAD",
+            "CORES",
+            "FILESYSTEMS",
+            "PROCESSES",
+            "IO",
+        ]
+        .contains(&line)
+        {
             section = line;
             continue;
         }
@@ -138,7 +165,7 @@ fn parse(raw: &str) -> Counters {
     }
     out
 }
-fn delta(now: u64, old: u64, secs: f64) -> Option<f64> {
+pub(super) fn delta(now: u64, old: u64, secs: f64) -> Option<f64> {
     if secs <= 0.0 {
         return None;
     }
@@ -192,12 +219,32 @@ pub fn spawn(
     window: String,
     stop: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
+    spawn_sampler(s, window, stop, false)
+}
+fn spawn_sampler(
+    s: SavedSession,
+    window: String,
+    stop: Arc<AtomicBool>,
+    dashboard: bool,
+) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let mut old = Counters::default();
+        let mut old_raw = String::new();
+        let mut old_details = super::details::Details::default();
+        let mut slow_at: Option<Instant> = None;
+        let mut cpu_history = Vec::new();
+        let mut mem_history = Vec::new();
         let mut previous = Instant::now();
         let mut rx_history = Vec::new();
         let mut tx_history = Vec::new();
         while !stop.load(Ordering::Relaxed) {
+            if dashboard && !health_lease(&s.id) {
+                break;
+            }
+            if !dashboard && health_lease(&s.id) {
+                std::thread::sleep(Duration::from_millis(200));
+                continue;
+            }
             let panes =
                 call(&["list-panes", "-t", &window, "-F", "#{@essh_strip}"]).unwrap_or_default();
             let active = call(&[
@@ -208,9 +255,13 @@ pub fn spawn(
                 "#{window_active} #{session_attached}",
             ])
             .unwrap_or_default();
-            let visible = panes.lines().any(|l| l == "1")
+            let visible = (dashboard || panes.lines().any(|l| l == "1"))
                 && active.starts_with("1 ")
                 && !active.ends_with(" 0");
+            if dashboard && !visible {
+                std::thread::sleep(Duration::from_millis(200));
+                continue;
+            }
             // -O check and ProxyCommand=false prohibit telemetry from creating a
             // fresh authenticated connection when the interactive master is gone.
             let mut check = ssh_command(&s);
@@ -219,7 +270,23 @@ pub fn spawn(
                 let _ = option(&window, "@essh_state", "connected");
                 let _ = option(&window, "@essh_dot", "#[fg=#35d07f]●#[default]");
                 let start = Instant::now();
-                let script = format!("{}; printf 'RUNNING\\n'; tmux -L essh list-panes -s -t '=essh-{}' -F '#{{pane_current_command}}' 2>/dev/null | head -n 1", if visible { FULL } else { LIGHT }, s.id);
+                let collect_slow =
+                    dashboard && slow_at.is_none_or(|t| t.elapsed() > Duration::from_secs(3));
+                let detail_script = if dashboard {
+                    format!(
+                        "{FULL}; {}; {}",
+                        super::details::SCRIPT,
+                        if collect_slow {
+                            super::details::SLOW
+                        } else {
+                            "true"
+                        }
+                    )
+                } else {
+                    if visible { FULL } else { LIGHT }.into()
+                };
+                let script = format!("{}; printf 'RUNNING\\n'; tmux -L essh list-panes -s -t '=essh-{}' -F '#{{pane_current_command}}' 2>/dev/null | head -n 1", detail_script, s.id);
+                let script = format!("sh -c {}", quote(&script));
                 let mut cmd = ssh_command(&s);
                 cmd.args([
                     "-T",
@@ -235,19 +302,53 @@ pub fn spawn(
                 ]);
                 if let Ok(raw) = capture(cmd, Duration::from_secs(3)) {
                     let counters = parse(&raw);
+                    let mut detail =
+                        super::details::parse(&raw, &old_raw, previous.elapsed().as_secs_f64());
+                    if !collect_slow {
+                        detail.disks = old_details.disks.clone();
+                        detail.processes = old_details.processes.clone();
+                    }
+                    if collect_slow {
+                        slow_at = Some(Instant::now());
+                    }
+                    for (name, rx, tx) in &detail.interfaces {
+                        let mut hist = old_details
+                            .interface_history
+                            .get(name)
+                            .cloned()
+                            .unwrap_or_default();
+                        push(&mut hist.0, *rx);
+                        push(&mut hist.1, *tx);
+                        detail.interface_history.insert(name.clone(), hist);
+                    }
                     let mut m = sample(&counters, &old, previous.elapsed().as_secs_f64());
                     // RTT is measured separately by the host list's TCP probe;
                     // remote command execution time is not network latency.
                     m.rtt = ui::cached_latency(&s.host.name);
+                    old_raw = raw;
+                    push(&mut cpu_history, m.cpu);
+                    push(&mut mem_history, m.mem);
+                    detail.cpu_history = cpu_history.clone();
+                    detail.mem_history = mem_history.clone();
+                    old_details = detail.clone();
+                    m.details = detail;
                     previous = start;
                     old = counters;
                     push(&mut rx_history, m.rx);
                     push(&mut tx_history, m.tx);
                     m.rx_history = rx_history.clone();
                     m.tx_history = tx_history.clone();
-                    let path = root().join(format!("{}.metrics", s.id));
+                    let path = root().join(format!(
+                        "{}.{}",
+                        s.id,
+                        if dashboard { "health" } else { "metrics" }
+                    ));
                     if let Ok(data) = serde_json::to_vec(&m) {
-                        let temp = path.with_extension("metrics.tmp");
+                        let temp = path.with_extension(if dashboard {
+                            "health.tmp"
+                        } else {
+                            "metrics.tmp"
+                        });
                         if fs::write(&temp, data).is_ok() {
                             let _ = fs::rename(temp, path);
                         }
@@ -265,6 +366,115 @@ pub fn spawn(
             }
         }
     })
+}
+
+fn health_lease(id: &str) -> bool {
+    let prefix = format!("{id}.health-lease-");
+    fs::read_dir(root())
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .any(|e| {
+            e.file_name().to_string_lossy().starts_with(&prefix)
+                && fs::read_to_string(e.path())
+                    .ok()
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .is_some_and(|t| chrono::Utc::now().timestamp() - t < 4)
+        })
+}
+pub struct HealthCollector {
+    lease: PathBuf,
+    id: String,
+    window: String,
+}
+impl HealthCollector {
+    pub fn new(w: &Window) -> Result<Self> {
+        let token = uuid::Uuid::new_v4().simple().to_string();
+        let out = Self {
+            lease: root().join(format!("{}.health-lease-{token}", w.id)),
+            id: w.id.clone(),
+            window: w.target.clone(),
+        };
+        fs::write(&out.lease, chrono::Utc::now().timestamp().to_string())?;
+        out.ensure_worker()?;
+        Ok(out)
+    }
+    fn ensure_worker(&self) -> Result<()> {
+        let token = uuid::Uuid::new_v4().simple().to_string();
+        let lock = root().join(format!("{}.health-worker", self.id));
+        let stale = fs::metadata(&lock)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|t| t > Duration::from_secs(10));
+        if stale {
+            let _ = fs::remove_file(&lock);
+        }
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock)
+        {
+            Ok(mut file) => {
+                file.write_all(token.as_bytes())?;
+                // The popup may close while a shared collector is serving another view.
+                let result = Command::new(std::env::current_exe()?)
+                    .process_group(0)
+                    .args(["tmux", "health-sample", &self.id, &self.window, &token])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn();
+                match result {
+                    Ok(mut child) => {
+                        std::thread::spawn(move || {
+                            let _ = child.wait();
+                        });
+                    }
+                    Err(e) => {
+                        let _ = fs::remove_file(lock);
+                        return Err(e.into());
+                    }
+                }
+            }
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => (),
+            Err(e) => return Err(e.into()),
+        }
+        Ok(())
+    }
+    pub fn touch(&self) {
+        let _ = fs::write(&self.lease, chrono::Utc::now().timestamp().to_string());
+        let _ = self.ensure_worker();
+    }
+}
+impl Drop for HealthCollector {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.lease);
+    }
+}
+pub fn health_worker(id: &str, window: &str, token: &str) -> Result<()> {
+    let s = saved(id)?;
+    let lock = root().join(format!("{id}.health-worker"));
+    anyhow::ensure!(
+        fs::read_to_string(&lock)? == token,
+        "Health worker ownership changed"
+    );
+    let stop = Arc::new(AtomicBool::new(false));
+    let worker = spawn_sampler(s, window.into(), stop.clone(), true);
+    while !worker.is_finished() {
+        if fs::read_to_string(&lock).ok().as_deref() != Some(token) {
+            stop.store(true, Ordering::Relaxed);
+            break;
+        }
+        let _ = fs::write(&lock, token);
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    let _ = worker.join();
+    if fs::read_to_string(&lock).ok().as_deref() == Some(token) {
+        let _ = fs::remove_file(lock);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

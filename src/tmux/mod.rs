@@ -1,5 +1,7 @@
 //! Local tmux owns navigation; an isolated remote tmux session owns each shell.
+mod details;
 mod metrics;
+mod navigation;
 mod ui;
 
 use crate::config::AppConfig;
@@ -17,6 +19,18 @@ use std::{
 pub enum Action {
     /// Start or reattach the persistent workspace
     Start,
+    /// Reload navigation without stopping connections
+    Refresh,
+    #[command(hide = true)]
+    HealthSample {
+        id: String,
+        window: String,
+        token: String,
+    },
+    #[command(hide = true)]
+    Navigate { command: String },
+    #[command(hide = true)]
+    View { view: navigation::View },
     /// Host list (normally opened by the workspace)
     List {
         #[arg(long)]
@@ -66,6 +80,8 @@ pub struct SavedSession {
     pub id: String,
     pub host: Host,
     pub created: i64,
+    #[serde(default)]
+    pub index: Option<u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -81,6 +97,19 @@ pub struct Window {
 pub fn run(action: Action, config: AppConfig) -> Result<()> {
     match action {
         Action::Start => start(),
+        Action::Refresh => {
+            configure()?;
+            for w in windows()? {
+                let mut record = saved(&w.id)?;
+                record.index = w.index.parse().ok();
+                fs::write(session_path(&record.id)?, serde_json::to_vec(&record)?)?;
+            }
+            call(&["respawn-pane", "-k", "-t", "essh:0", &helper(&["list"])?])?;
+            Ok(())
+        }
+        Action::HealthSample { id, window, token } => metrics::health_worker(&id, &window, &token),
+        Action::Navigate { command } => navigation::run(&command),
+        Action::View { view } => ui::workspace::run(config, view, true, false),
         Action::List { new } => ui::hosts(config, new),
         Action::Switch => ui::switcher(),
         Action::Help => ui::help(),
@@ -278,15 +307,20 @@ fn start() -> Result<()> {
     configure()?;
     // Local reboot or server loss must not lose the remote session identities.
     let live = windows()?;
+    let mut records = Vec::new();
     for entry in fs::read_dir(root())? {
         let path = entry?.path();
         if path.extension().is_some_and(|e| e == "json") {
             if let Ok(record) = serde_json::from_slice::<SavedSession>(&fs::read(path)?) {
-                if valid_id(&record.id) && !live.iter().any(|w| w.id == record.id) {
-                    validate_host(&record.host)?;
-                    create_window(&record, false)?;
-                }
+                records.push(record);
             }
+        }
+    }
+    records.sort_by_key(|r| (r.index.unwrap_or(u32::MAX), r.created));
+    for record in records {
+        if valid_id(&record.id) && !live.iter().any(|w| w.id == record.id) {
+            validate_host(&record.host)?;
+            create_window(&record, false)?;
         }
     }
     call(&["select-window", "-t", "essh:0"])?;
@@ -388,6 +422,7 @@ fn configure() -> Result<()> {
         "60%",
         &helper(&["kill", "current"])?,
     ])?;
+    navigation::configure()?;
     Ok(())
 }
 
@@ -438,6 +473,7 @@ pub fn open(host: &Host, new: bool) -> Result<()> {
         id: uuid::Uuid::new_v4().simple().to_string(),
         host: host.clone(),
         created: chrono::Utc::now().timestamp(),
+        index: None,
     };
     fs::write(session_path(&record.id)?, serde_json::to_vec(&record)?)?;
     create_window(&record, true)?;
@@ -446,6 +482,10 @@ pub fn open(host: &Host, new: bool) -> Result<()> {
 
 fn create_window(record: &SavedSession, connect: bool) -> Result<()> {
     let host = &record.host;
+    let requested = record
+        .index
+        .map(|n| format!("essh:{n}"))
+        .unwrap_or_else(|| "essh:".into());
     // Create metadata before starting the helper: it uses this window's identity.
     let target = call(&[
         "new-window",
@@ -454,11 +494,16 @@ fn create_window(record: &SavedSession, connect: bool) -> Result<()> {
         "-F",
         "#{window_id}",
         "-t",
-        "essh:",
+        &requested,
         "-n",
         &host.name,
         "sleep 86400",
     ])?;
+    let mut record = record.clone();
+    record.index = call(&["display-message", "-p", "-t", &target, "#{window_index}"])?
+        .parse()
+        .ok();
+    fs::write(session_path(&record.id)?, serde_json::to_vec(&record)?)?;
     let pane = call(&["display-message", "-p", "-t", &target, "#{pane_id}"])?;
     option(&target, "@essh_main", &pane)?;
     option(&target, "@essh_id", &record.id)?;
@@ -576,7 +621,7 @@ fn attach(id: &str, wait: bool) -> Result<()> {
         };
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = sampler.join();
-        let _ = fs::remove_file(root().join(format!("{id}.metrics")));
+
         option(
             &window,
             "@essh_state",

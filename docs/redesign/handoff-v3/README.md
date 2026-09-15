@@ -34,106 +34,106 @@ and `ss` provide optional metrics; missing metrics do not prevent shell use.
 The new default is `essh`; `essh legacy` opens the previous native interface.
 Existing explicit CLI commands remain available during migration.
 
-## Screens and keys
+## Navigation
 
-Only hosts and terminal are primary screens. Switcher/help are popups. There is
-no dashboard, broadcast, palette, file browser, forwarding screen or fleet view.
-
-Hosts: `↑↓`/`jk` move, Enter connects or selects an existing session, `/` filters
-host names and tags, `a` adds a host, `e` edits a host, `?` opens help, `q` detaches.
-Host forms save to essh configuration; editing an SSH alias creates an essh
-connection override. SSH config entries themselves are not rewritten.
-
-**F2** toggles the health strip directly while connected, without a prefix.
-The original Ctrl+A then lowercase m shortcut also works. F2 is reserved by essh
-and is not passed through to the remote application.
-
-Local prefix is **Ctrl+A**:
-
-| Key after prefix | Action |
+| Key | Action |
 | --- | --- |
-| 1–9 | Select local session number |
-| s | Switcher; arrows/Enter, 1–9, n new, x kill, Esc close |
-| n | Host picker for an independent new session |
-| m | Toggle metrics pane in the current window |
-| d | Host list |
-| q | Detach the local client |
-| x | Confirm and terminate the selected remote session |
-| ? | Help |
-| Ctrl+A | Send literal Ctrl+A |
+| F1 | Contextual help; F1 or Esc returns |
+| F2 | Full health dashboard; F2 or Esc returns to the terminal |
+| F3 | Session switcher |
+| F4 | Main menu (Hosts), keeping remote sessions running |
+| F5 / F6 | Previous / next SSH session, wrapping and skipping Hosts |
 
-The remote prefix remains **Ctrl+B**. These local bindings replace corresponding
-tmux defaults; other tmux keys remain available. `x` requires typing `yes` because
-it terminates remote programs. Failed termination retains the local entry; it
-never reports that an unreachable session was killed.
+The two-row tmux bar has session tabs and clickable navigation controls. Views
+inside popups repeat those controls. Buttons shorten in small terminals.
+Mouse support includes row selection, double-click activation, wheel scrolling,
+pane focus and divider resizing. Keyboard navigation works without a mouse.
 
-## Reachability and metrics
+Hosts: arrows/jk select, Enter connects or reattaches, a adds, e edits, / filters
+names/tags, q detaches and keeps jobs running. Tab focuses navigation controls;
+Enter activates one. On the main menu, Esc returns to the remembered session.
 
-Direct hosts get TCP probes on their configured port, every five seconds after
-the preceding sweep completes, with at most eight concurrent probes. The last
-ten successful measurements feed the latency graph. Proxied hosts show
-`via proxy · unknown` until their SSH transport is established; direct TCP
-failure is not evidence of proxy failure. DNS resolution can delay a probe
-worker but cannot block keyboard input.
+Sessions: arrows/jk select, Enter switches, 1–9 jumps, / filters, n creates a new
+session, x explicitly confirms remote termination. More than nine sessions are
+available by scrolling. Session numbers are saved alongside UUIDs across restart.
+A disconnected entry is retained as unverified; failed termination retains it.
 
-- Green: successful direct probe or current SSH connection.
-- Red: saved connection whose current reachability is unverified/failed.
-- Dim open dot: no saved session and no successful probe.
-- Reconnect text: **remote state unknown**, never “tmux still running”.
+Help: scroll with arrows/wheel; F1 or Esc returns. It documents mouse actions,
+health, session lifetime, remote splits, copy behavior, and compatibility keys.
 
-The status bar shows the active connection's network rates and direct-host TCP
-connect latency (which includes DNS resolution), plus the clock. Hosts shows only
-the clock; it has no current remote host. Missing or stale values are `—` or
-“metrics unavailable”, never fabricated zeroes. Successful metrics are considered
-stale after twelve seconds.
+F1–F6 are reserved by essh. To send a reserved key to the remote program, press
+Ctrl+A, release, then v, then the desired key. Ctrl+A twice sends literal Ctrl+A.
+The remote tmux prefix remains Ctrl+B. Esc and Ctrl+C in the terminal continue
+to go to the remote program. Existing Ctrl+A session/help/menu bindings remain.
+Ctrl+A then lowercase m toggles the optional side strip.
 
-Metrics reuse each interactive OpenSSH ControlMaster connection. A private socket
-directory has owner/mode validation. The sampler checks that the master exists
-and disables fallback connections. It samples network counters every five seconds;
-when that window's strip is visible to an attached client it also samples CPU,
-memory, root-filesystem usage and TCP peers about once per second. Sampling and
-subprocess timeouts are bounded; the sampler stops when the SSH child exits.
+## Full health dashboard
 
-Network totals aggregate non-loopback interfaces. Peer rates use `ss -tinH`
-`bytes_sent`/`bytes_received` counter deltas keyed by endpoint pair, then aggregate
-by peer. Queue sizes are not rates. A new socket or counter reset needs another
-sample. Short-lived sockets between samples are not captured; missing counters
-show an unavailable/empty state. Peer totals need not equal interface totals.
+F2 opens a full-size local popup, leaving the remote terminal running. Its
+header identifies the host, session, connection state and sample age. F5/F6 and
+session-tab clicks change the host without mixing the previous host's readings.
+Without a session, Health directs the user to connect from the main menu.
 
-The strip is an explicit 38-column **local pane belonging to its connection
-window**, off by default. Switching windows reveals that window's own strip state.
-It does not magically migrate between windows. Hidden windows use light probes.
+Panels:
 
-## Character-grid layout
+- CPU total/per-core usage, history, and 1/5/15-minute load averages.
+- Memory total/used/available, swap and recent usage history.
+- Network RX/TX rates and history, with interface selection (i).
+- Storage capacity by filesystem, plus physical-device I/O rates when available.
+- Processes: PID, command name, CPU and memory; c/m switches the sort order.
+- TCP peers and interval RX/TX rates.
 
-Palette: terminal `#080b0d`, status `#0d1316`, selected row `#10171b`, track
-`#14191d`, square border `#1c2429`, primary `#cbd5dd`, secondary `#8b9aa6`,
-dim `#5b6b7a`, cyan `#4fd1c5`, green `#35d07f`, red `#ef5f52`.
-No gradients, rounded borders or font-size dependencies. Host tables use a cyan
-selection gutter; RX is green, TX cyan, utilization bars solid green. tmux owns
-the one-row status bar; pixel borders/shadows and shell prompt colors in HTML
-are illustrative, not control over a remote shell's theme.
+Tab/Shift+Tab focuses a panel. Arrows or the mouse wheel scroll it. At 120+
+columns and sufficient height the six panels form a grid. Smaller terminals use
+selectable panels, including at 60×20. F2/Esc returns to the shell; b switches to
+the optional 38-column side strip. The strip still requires a 100-column window.
 
-At 105+ available columns hosts includes USER@ADDRESS; below that it hides that
-column. Below 65 columns it also hides LAST and shortens HOST. Rows scroll with
-the selection; long values clip inside their columns. The strip opens only at
-100+ columns and shows a compact resize hint if narrowed below 26. Popups use
-90% of the terminal width so they fit smaller terminals. Sessions beyond 9 are
-reachable through the scrolling switcher. Help wraps to the terminal width.
+Process CPU is the lifetime average reported by ps, not instantaneous CPU.
+Only command names are collected, not command arguments. Network rates use
+counter deltas; peer counters exclude short-lived sockets between samples and
+need not equal interface totals. Physical I/O excludes virtual/aggregate devices
+to avoid counting the same transfer twice. Units are bytes/s or explicitly GiB.
+
+## Collection and availability
+
+Direct hosts use TCP probes on their configured port, with bounded concurrency
+and a five-second interval after each sweep. Proxied hosts do not get misleading
+direct-connect failure verdicts. Latency includes DNS and TCP connection setup;
+it is not remote command runtime. Missing/proxied latency is unavailable.
+
+Health uses the existing OpenSSH control socket, with no fallback authentication
+connection. A per-session worker is shared by dashboard clients. Each view renews
+an expiring lease; closing or crashing the last view stops the worker. The normal
+sampler pauses while Health is collecting, avoiding duplicate detailed probes.
+Newly built samplers resume light status/strip sampling after Health closes.
+Existing SSH wrappers from an older binary retain their old light sampler until
+their next reconnect; refreshing navigation does not interrupt those sessions.
+
+CPU/memory/network counters refresh about once a second. Processes/filesystems
+refresh roughly every three seconds. The status-only sampler runs roughly every
+five seconds. Linux /proc and ss supply optional metrics; unsupported metrics
+remain unavailable independently. A disconnected dashboard retains the previous
+sample with its age and connection state; data becomes stale after twelve seconds.
+No unavailable reading is represented as a measured zero.
+
+The status bar shows the current connection's rates and latency, plus the clock.
+Hosts has no current remote connection, so it shows the clock only. The navigation
+row remains visible and clickable. Long session lists overflow into the switcher.
+
+## Updating a running workspace
+
+After building, `essh tmux refresh` reapplies bindings, saves the current session
+numbers, and restarts only the main-menu UI. SSH windows and remote jobs remain
+running. The dashboard worker uses the new binary immediately.
 
 ## Validation
 
-Unit tests cover counter deltas/resets and peer rates. Run `cargo test`,
-`cargo fmt --check`, and `cargo clippy --all-targets --all-features -- -D warnings`.
+Run `cargo fmt --check`, `cargo test`, and
+`cargo clippy --all-targets --all-features -- -D warnings`.
 
-After `cargo build`, run `python3 scripts/test-tmux-v3.py`. It starts an isolated
-loopback sshd with ephemeral keys and separate local/remote tmux servers, then
-checks navigation, metrics, two independent sessions on one host, forced SSH
-disconnection, persistent shell state on reconnect, narrow layout, quit, saved
-ID restoration and confirmed remote termination. It requires local sshd and a
-login account that permits public-key authentication. It cleans up its fixture
-servers and never changes the user's SSH configuration.
-
-Sources: [tmux manual](https://man.openbsd.org/tmux),
-[OpenSSH manual](https://man.openbsd.org/ssh),
-[ss manual](https://man7.org/linux/man-pages/man8/ss.8.html).
+After `cargo build`, run `python3 scripts/test-tmux-v3.py`. The fixture uses an
+isolated loopback sshd, ephemeral keys and separate tmux servers. It exercises
+F1–F6, full health data, mouse controls, side-strip compatibility, reconnect,
+resizing, saved IDs/order, explicit termination and failed-kill retention.
+Unit rendering checks cover compact and wide panel layouts and navigation hit
+regions. The standalone HTML is a design reference containing sample data.
