@@ -74,6 +74,12 @@ header identifies the host, session, connection state and sample age. F5/F6 and
 session-tab clicks change the host without mixing the previous host's readings.
 Without a session, Health directs the user to connect from the main menu.
 
+The layout follows the full-dashboard reference: CPU, memory and network on the
+left; storage, processes and peers on the right. Square borders and panel gaps
+separate sections. Usage meters and RX histories are green; TX is cyan.
+Sort/interface labels identify the active selection, and empty readings retain
+the same panel layout.
+
 Panels:
 
 - CPU total/per-core usage, history, and 1/5/15-minute load averages.
