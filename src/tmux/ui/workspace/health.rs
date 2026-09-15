@@ -2,7 +2,6 @@
 use super::*;
 
 const BORDER: Color = Color::Rgb(28, 36, 41);
-const TRACK: Color = Color::Rgb(20, 25, 29);
 const MID: Color = Color::Rgb(139, 154, 166);
 
 fn text(value: impl Into<String>, color: Color) -> Line<'static> {
@@ -38,17 +37,7 @@ fn rate(n: Option<f64>) -> String {
     }
 }
 fn meter(n: Option<f64>, width: u16) -> Line<'static> {
-    let Some(n) = n.filter(|n| n.is_finite()) else {
-        return text("— usage unavailable", DIM);
-    };
-    let used = (n.clamp(0.0, 100.0) / 100.0 * f64::from(width)).round() as usize;
-    Line::from(vec![
-        Span::styled("━".repeat(used), Style::default().fg(GREEN)),
-        Span::styled(
-            "━".repeat(usize::from(width).saturating_sub(used)),
-            Style::default().fg(TRACK),
-        ),
-    ])
+    thin_meter(n, width)
 }
 fn graph(history: &[u64], width: u16, color: Color) -> Line<'static> {
     if history.is_empty() {
@@ -518,7 +507,7 @@ mod tests {
         ] {
             assert!(content.contains(expected), "missing {expected}");
         }
-        for (symbol, color) in [("↓", GREEN), ("↑", CYAN), ("━", GREEN)] {
+        for (symbol, color) in [("↓", GREEN), ("↑", CYAN), ("─", GREEN)] {
             assert!(buffer
                 .content
                 .iter()

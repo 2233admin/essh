@@ -6,7 +6,7 @@ use crossterm::{
 };
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Gauge, Paragraph, Row, Table, TableState, Wrap},
+    widgets::{Block, Borders, Paragraph, Row, Table, TableState, Wrap},
 };
 use std::time::Instant;
 use std::{
@@ -79,6 +79,21 @@ enum GraphScale {
     Traffic,
     Percent,
     Latency,
+}
+// Thin horizontal strokes leave space above and below the meter, unlike
+// full-cell gauges. The track uses the reference's exact #14191d color.
+fn thin_meter(value: Option<f64>, width: u16) -> Line<'static> {
+    let Some(value) = value.filter(|v| v.is_finite()) else {
+        return Line::styled("— usage unavailable", Style::default().fg(DIM));
+    };
+    let used = (value.clamp(0.0, 100.0) / 100.0 * f64::from(width)).round() as usize;
+    Line::from(vec![
+        Span::styled("─".repeat(used), Style::default().fg(GREEN).bg(BG)),
+        Span::styled(
+            "─".repeat(usize::from(width).saturating_sub(used)),
+            Style::default().fg(Color::Rgb(20, 25, 29)).bg(BG),
+        ),
+    ])
 }
 fn graph_history(values: &[u64], width: usize, scale: GraphScale) -> String {
     let ceiling = match scale {
@@ -381,16 +396,21 @@ pub fn strip(id: &str) -> Result<()> {
                 for (area, name, value) in [
                     (r[3], "cpu", m.cpu),
                     (r[4], "mem", m.mem),
-                    (r[5], "disk /", m.disk),
+                    (r[5], "disk", m.disk),
                 ] {
                     match value {
-                        Some(v) => f.render_widget(
-                            Gauge::default()
-                                .ratio((v / 100.0).clamp(0.0, 1.0))
-                                .label(format!("{name} {v:.0}%"))
-                                .gauge_style(Style::default().fg(GREEN).bg(SELECTED)),
-                            area,
-                        ),
+                        Some(v) => {
+                            let mut spans = vec![Span::styled(
+                                format!("{name:<5} "),
+                                Style::default().fg(DIM),
+                            )];
+                            spans.extend(thin_meter(Some(v), area.width.saturating_sub(12)).spans);
+                            spans.push(Span::styled(
+                                format!(" {v:>4.0}%"),
+                                Style::default().fg(TEXT),
+                            ));
+                            line(f, area, Line::from(spans), TEXT);
+                        }
                         None => line(f, area, format!("{name} —"), DIM),
                     }
                 }
