@@ -10,7 +10,9 @@ and remote tmux on the hosts you connect to.
 - F4 returns to the main menu; F5/F6 switch to the previous/next session.
 - Click session tabs and navigation controls, or use the keyboard.
 - In Health: Tab changes panel, arrows/wheel scroll, i selects an interface,
-  c/m sorts processes, and b shows the optional side strip.
+  c/m sorts processes, Left/Right browses hosts, and b cycles the side mode.
+- Ctrl+A m cycles strip → half-width health → off; Ctrl+A h opens full health.
+- h on Hosts opens health for the selected host, including disconnected hosts.
 - F2 or Esc closes Health and returns to the terminal.
 - q on hosts (or Ctrl+A q in a session) detaches without ending remote work.
 - Ctrl+A x confirms before terminating a remote session.

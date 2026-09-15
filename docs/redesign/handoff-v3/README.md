@@ -1,8 +1,10 @@
 # essh v3 — tmux workspace
 
-The standalone [design reference](index.html) has four working view buttons and
-no JavaScript or font downloads. Its sample metrics are illustrative. The app
-uses Rust/ratatui on a terminal character grid.
+The September 16 [interactive prototype](../handoff-v3-prototype/ESSH%20v3%20Prototype.dc.html)
+and its [handoff](../handoff-v3-prototype/README.md) are the latest design inputs.
+They contain simulated data and shell behavior. The app uses Rust/ratatui,
+real OpenSSH sessions, and Linux telemetry. The [earlier reference](index.html)
+is retained for comparison.
 
 ## Architecture
 
@@ -50,7 +52,7 @@ Mouse support includes row selection, double-click activation, wheel scrolling,
 pane focus and divider resizing. Keyboard navigation works without a mouse.
 
 Hosts: arrows/jk select, Enter connects or reattaches, a adds, e edits, / filters
-names/tags, q detaches and keeps jobs running. Tab focuses navigation controls;
+names/addresses/tags, q detaches and keeps jobs running. Tab focuses navigation controls;
 Enter activates one. On the main menu, Esc returns to the remembered session.
 
 Sessions: arrows/jk select, Enter switches, 1–9 jumps, / filters, n creates a new
@@ -65,7 +67,8 @@ F1–F6 are reserved by essh. To send a reserved key to the remote program, pres
 Ctrl+A, release, then v, then the desired key. Ctrl+A twice sends literal Ctrl+A.
 The remote tmux prefix remains Ctrl+B. Esc and Ctrl+C in the terminal continue
 to go to the remote program. Existing Ctrl+A session/help/menu bindings remain.
-Ctrl+A then lowercase m toggles the optional side strip.
+Ctrl+A then lowercase m cycles off → strip → half → off. The mode follows
+session switches. Ctrl+A h opens full health. h on Hosts opens the selected host.
 
 ## Full health dashboard
 
@@ -74,11 +77,13 @@ header identifies the host, session, connection state and sample age. F5/F6 and
 session-tab clicks change the host without mixing the previous host's readings.
 Without a session, Health directs the user to connect from the main menu.
 
-The layout follows the full-dashboard reference: CPU, memory and network on the
-left; storage, processes and peers on the right. Square borders and panel gaps
-separate sections. Usage meters and RX histories are green; TX is cyan.
-Sort/interface labels identify the active selection, and empty readings retain
-the same panel layout.
+The traffic-first layout follows the latest prototype: RX/TX across the top,
+CPU/memory/storage across the middle, then peers and processes. Dividing rules,
+flat green meters, and cyan transmit graphs retain the netwatch palette.
+Half-width mode places CPU/memory beside storage under the traffic graphs.
+Left/Right cycles configured hosts, including hosts without an SSH session.
+Enter or r connects/reconnects; browsing never silently authenticates.
+Disconnected/stale hosts show an explicit “not live” state with sample age.
 
 Panels:
 
@@ -89,10 +94,10 @@ Panels:
 - Processes: PID, command name, CPU and memory; c/m switches the sort order.
 - TCP peers and interval RX/TX rates.
 
-Tab/Shift+Tab focuses a panel. Arrows or the mouse wheel scroll it. At 120+
-columns and sufficient height the six panels form a grid. Smaller terminals use
-selectable panels, including at 60×20. F2/Esc returns to the shell; b switches to
-the optional 38-column side strip. The strip still requires a 100-column window.
+Tab/Shift+Tab focuses a panel. Arrows or the mouse wheel scroll it. At 100+
+columns and sufficient height the panels form three rows. Smaller terminals use
+selectable panels, including at 60×20. F2/Esc returns to the shell; b cycles the side mode and returns to the shell. Side views require an
+80-column window; narrower windows retain F2 full health.
 
 Process CPU is the lifetime average reported by ps, not instantaneous CPU.
 Only command names are collected, not command arguments. Network rates use
@@ -118,8 +123,8 @@ their next reconnect; refreshing navigation does not interrupt those sessions.
 CPU/memory/network counters refresh about once a second. Processes/filesystems
 refresh roughly every three seconds. The status-only sampler runs roughly every
 five seconds. Linux /proc and ss supply optional metrics; unsupported metrics
-remain unavailable independently. A disconnected dashboard retains the previous
-sample with its age and connection state; data becomes stale after twelve seconds.
+remain unavailable independently. A disconnected dashboard hides the old metric area and shows the last sample
+age with its connection state; data becomes stale after twelve seconds.
 No unavailable reading is represented as a measured zero.
 
 The status bar shows the current connection's rates and latency, plus the clock.
@@ -143,3 +148,24 @@ F1–F6, full health data, mouse controls, side-strip compatibility, reconnect,
 resizing, saved IDs/order, explicit termination and failed-kill retention.
 Unit rendering checks cover compact and wide panel layouts and navigation hit
 regions. The standalone HTML is a design reference containing sample data.
+
+## Prototype implementation notes
+
+- CPU histories use a fixed 0–100% ceiling; RTT uses 0–50 ms. Traffic uses the
+  buffer maximum with 60% headroom. Histories pad on the left with the baseline.
+- Host rows include latency history and last observed activity. Empty host/session
+  lists have explicit messages. Filters include name, address and tags; Enter connects.
+- Add/Edit uses bordered fields, keyboard/mouse focus, required-field validation,
+  duplicate-name protection, and preserved configured order. The port field remains
+  available. Blank user is root in this form; existing OpenSSH defaults are unchanged.
+- The session switcher starts on the active session. Command readings refer to the
+  active remote pane and mark stale data. Kill uses y to confirm, n/Esc to cancel,
+  and selects the nearest remaining session only after confirmed remote termination.
+- The real quit flow returns to the user's shell and prints a recovery summary;
+  run `essh` to relaunch. It does not simulate a shell or intercept arbitrary keys
+  after quitting. Remote liveness remains unverified when disconnected.
+- F1–F6 and the visible second navigation row remain as explicitly requested.
+  Up/Down scroll health panels; Left/Right (h/l) browse hosts. This preserves the
+  previous dashboard controls where the prototype assigns conflicting keys.
+- Existing remote shells own their prompt, cursor, Ctrl+C and Ctrl+L behavior.
+  Browser prefix emulation and canned shell output are not installed in the app.

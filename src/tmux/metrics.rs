@@ -19,6 +19,7 @@ pub struct Snapshot {
     pub rx: Option<f64>,
     pub tx: Option<f64>,
     pub rtt: Option<f64>,
+    pub rtt_history: Vec<u64>,
     pub cpu: Option<f64>,
     pub mem: Option<f64>,
     pub disk: Option<f64>,
@@ -285,7 +286,7 @@ fn spawn_sampler(
                 } else {
                     if visible { FULL } else { LIGHT }.into()
                 };
-                let script = format!("{}; printf 'RUNNING\\n'; tmux -L essh list-panes -s -t '=essh-{}' -F '#{{pane_current_command}}' 2>/dev/null | head -n 1", detail_script, s.id);
+                let script = format!("{}; printf 'RUNNING\\n'; tmux -L essh display-message -p -t '=essh-{}:' '#{{pane_current_command}}' 2>/dev/null", detail_script, s.id);
                 let script = format!("sh -c {}", quote(&script));
                 let mut cmd = ssh_command(&s);
                 cmd.args([
@@ -325,6 +326,11 @@ fn spawn_sampler(
                     // RTT is measured separately by the host list's TCP probe;
                     // remote command execution time is not network latency.
                     m.rtt = ui::cached_latency(&s.host.name);
+                    m.rtt_history = ui::cached_history(&s.host.name);
+                    let _ = fs::write(
+                        ui::probe_path(&s.host.name).with_extension("activity"),
+                        serde_json::to_vec(&(m.at, m.running.clone())).unwrap_or_default(),
+                    );
                     old_raw = raw;
                     push(&mut cpu_history, m.cpu);
                     push(&mut mem_history, m.mem);

@@ -55,7 +55,13 @@ pub enum Action {
     #[command(hide = true)]
     Toggle { window: String },
     #[command(hide = true)]
-    Strip { id: String },
+    Strip {
+        id: String,
+        #[arg(long)]
+        half: bool,
+    },
+    #[command(hide = true)]
+    SyncSide { window: String },
     #[command(hide = true)]
     Status { window: String },
     #[command(hide = true)]
@@ -122,7 +128,14 @@ pub fn run(action: Action, config: AppConfig) -> Result<()> {
         }
         Action::Attach { id, wait } => attach(&id, wait),
         Action::Toggle { window } => toggle(&window),
-        Action::Strip { id } => ui::strip(&id),
+        Action::Strip { id, half } => {
+            if half {
+                ui::workspace::half(&id)
+            } else {
+                ui::strip(&id)
+            }
+        }
+        Action::SyncSide { window } => sync_side(&window),
         Action::Status { window } => {
             print_status(&window);
             Ok(())
@@ -207,7 +220,6 @@ pub fn hosts(config: &AppConfig) -> Vec<Host> {
             });
         }
     }
-    hosts.sort_by(|a, b| a.name.cmp(&b.name));
     hosts
 }
 
@@ -283,7 +295,6 @@ pub fn call(args: &[&str]) -> Result<String> {
 
 fn start() -> Result<()> {
     use std::io::IsTerminal;
-    use std::os::unix::process::CommandExt;
     anyhow::ensure!(
         io::stdin().is_terminal() && io::stdout().is_terminal(),
         "essh needs an interactive terminal"
@@ -324,11 +335,15 @@ fn start() -> Result<()> {
         }
     }
     call(&["select-window", "-t", "essh:0"])?;
-    let error = tmux()
+    let status = tmux()
         .env_remove("TMUX")
         .args(["attach-session", "-t", "=essh"])
-        .exec();
-    Err(error.into())
+        .status()?;
+    anyhow::ensure!(status.success(), "tmux client exited with {status}");
+    let sessions = windows().unwrap_or_default();
+    let hosts: std::collections::HashSet<_> = sessions.iter().map(|w| &w.host).collect();
+    println!("[detached from essh]\n{} saved sessions on {} hosts. Remote jobs were not terminated. Run essh to return.",sessions.len(),hosts.len());
+    Ok(())
 }
 
 fn configure() -> Result<()> {
@@ -339,6 +354,7 @@ fn configure() -> Result<()> {
         ("status-left-length", "8"),
         ("status-right-length", "40"),
         ("status-interval", "5"),
+        ("escape-time", "50"),
         ("base-index", "0"),
         ("renumber-windows", "off"),
         ("mouse", "off"),
@@ -423,6 +439,25 @@ fn configure() -> Result<()> {
         &helper(&["kill", "current"])?,
     ])?;
     navigation::configure()?;
+    let sync = format!(
+        "run-shell -b {}",
+        quote(&helper(&["sync-side", "#{window_id}"])?)
+    );
+    for hook in ["after-select-window", "client-resized"] {
+        call(&["set-hook", "-g", hook, &sync])?;
+    }
+    call(&[
+        "bind-key",
+        "h",
+        "display-popup",
+        "-E",
+        "-w",
+        "100%",
+        "-h",
+        "100%",
+        "-B",
+        &helper(&["view", "health"])?,
+    ])?;
     Ok(())
 }
 
@@ -460,7 +495,11 @@ pub fn open(host: &Host, new: bool) -> Result<()> {
     validate_host(host)?;
     let current = windows()?;
     if !new {
-        if let Some(w) = current.iter().rev().find(|w| w.host == host.name) {
+        if let Some(w) = current
+            .iter()
+            .filter(|w| w.host == host.name)
+            .max_by_key(|w| (w.active, w.state == "connected"))
+        {
             select(&w.target)?;
             if w.state.starts_with("disconnected") || w.state.starts_with("saved") {
                 let pane = call(&["show-window-options", "-v", "-t", &w.target, "@essh_main"])?;
@@ -628,23 +667,32 @@ fn attach(id: &str, wait: bool) -> Result<()> {
             "disconnected · remote state unknown",
         )?;
         option(&window, "@essh_dot", "#[fg=#ef5f52]●#[default]")?;
-        println!("\r\n{} disconnected ({:?}). Remote session state is unverified.\r\nEnter reconnects; q returns to hosts. Reconnecting recreates the shell if it has ended.", s.host.name, result?);
+        println!("\r\n{} disconnected ({:?}). Remote session state is unverified.\r\nr or Enter reconnects; q returns to hosts. Reconnecting recreates the shell if it has ended.", s.host.name, result?);
         loop {
-            let mut line = String::new();
-            io::stdin().read_line(&mut line)?;
-            if line.trim() == "q" {
-                select("essh:0")?;
-            } else {
+            if ui::reconnect_key()? {
                 break;
             }
+            navigation::main_menu()?;
         }
     }
 }
 
+fn side_mode() -> u8 {
+    call(&["show-options", "-gv", "@essh_side_mode"])
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
+}
 fn toggle(window: &str) -> Result<()> {
+    let mode = (side_mode() + 1) % 3;
+    call(&["set-option", "-g", "@essh_side_mode", &mode.to_string()])?;
+    sync_side(window)
+}
+fn sync_side(window: &str) -> Result<()> {
     let Some(w) = windows()?.into_iter().find(|w| w.target == window) else {
         return Ok(());
     };
+    let mode = side_mode();
     let panes = call(&[
         "list-panes",
         "-t",
@@ -652,35 +700,72 @@ fn toggle(window: &str) -> Result<()> {
         "-F",
         "#{pane_id}\t#{@essh_strip}",
     ])?;
-    if let Some(id) = panes.lines().find_map(|l| l.strip_suffix("\t1")) {
-        call(&["kill-pane", "-t", id])?;
-        return Ok(());
-    }
+    let pane = panes.lines().find_map(|l| l.strip_suffix("\t1"));
     let width: u16 = call(&["display-message", "-p", "-t", window, "#{window_width}"])?.parse()?;
-    if width < 100 {
-        call(&["display-message", "Strip needs at least 100 columns"])?;
-        return Ok(());
-    }
-    let pane = call(&[
-        "split-window",
-        "-h",
-        "-d",
-        "-l",
-        "38",
-        "-P",
-        "-F",
-        "#{pane_id}",
+    let wanted = if width < 80 { 0 } else { mode };
+    let applied = call(&[
+        "show-window-options",
+        "-v",
         "-t",
         window,
-        &helper(&["strip", &w.id])?,
-    ])?;
-    call(&["set-option", "-p", "-t", &pane, "@essh_strip", "1"])?;
+        "@essh_side_applied",
+    ])
+    .unwrap_or_default();
+    if let Some(pane) = pane {
+        if wanted == 0 {
+            call(&["kill-pane", "-t", pane])?;
+        } else {
+            let size = if wanted == 1 { 38 } else { width / 2 };
+            call(&["resize-pane", "-t", pane, "-x", &size.to_string()])?;
+            if applied != wanted.to_string() {
+                let cmd = if wanted == 2 {
+                    helper(&["strip", &w.id, "--half"])?
+                } else {
+                    helper(&["strip", &w.id])?
+                };
+                call(&["respawn-pane", "-k", "-t", pane, &cmd])?;
+            }
+        }
+    } else if wanted > 0 {
+        let size = if wanted == 1 { 38 } else { width / 2 };
+        let cmd = if wanted == 2 {
+            helper(&["strip", &w.id, "--half"])?
+        } else {
+            helper(&["strip", &w.id])?
+        };
+        let target = call(&["show-window-options", "-v", "-t", window, "@essh_main"])?;
+        let pane = call(&[
+            "split-window",
+            "-h",
+            "-d",
+            "-l",
+            &size.to_string(),
+            "-P",
+            "-F",
+            "#{pane_id}",
+            "-t",
+            &target,
+            &cmd,
+        ])?;
+        call(&["set-option", "-p", "-t", &pane, "@essh_strip", "1"])?;
+    }
+    option(window, "@essh_side_applied", &wanted.to_string())?;
+    if mode > 0 && wanted == 0 {
+        call(&[
+            "display-message",
+            "Side health needs 80 columns; F2 opens full health",
+        ])?;
+    }
     Ok(())
 }
+
 fn print_status(window: &str) {
     let time = chrono::Local::now().format("%H:%M").to_string();
     if let Ok(ws) = windows() {
-        if let Some(w) = ws.iter().find(|w| w.target == window) {
+        if let Some(w) = ws
+            .iter()
+            .find(|w| w.target == window && w.state == "connected")
+        {
             if let Some(m) = metrics::read(&w.id).filter(|m| m.fresh()) {
                 print!(
                     "↓ {} ↑ {} rtt {} {time}",
@@ -692,7 +777,7 @@ fn print_status(window: &str) {
                 );
                 return;
             }
-            print!("metrics unavailable {time}");
+            print!("{time}");
             return;
         }
     }
@@ -709,16 +794,10 @@ fn kill(window: &str) -> Result<()> {
         return Ok(());
     };
     let window = w.target.as_str();
-    println!(
-        "Kill session {} on {}? This ends its remote programs.\r\nType yes to confirm:",
-        w.index, w.host
-    );
-    io::stdout().flush()?;
-    let mut answer = String::new();
-    io::stdin().read_line(&mut answer)?;
-    if answer.trim() != "yes" {
+    if !ui::confirm_kill(&w)? {
         return Ok(());
     }
+    let mut answer = String::new();
     let s = saved(&w.id)?;
     let command = format!("tmux -L essh kill-session -t '=essh-{}'", s.id);
     let status = ssh_command(&s)
@@ -734,7 +813,19 @@ fn kill(window: &str) -> Result<()> {
     // Closing it may terminate this helper immediately.
     fs::remove_file(session_path(&s.id)?)?;
     let _ = fs::remove_file(root().join(format!("{}.metrics", s.id)));
+    if w.active {
+        let mut remaining: Vec<_> = windows()?.into_iter().filter(|v| v.id != w.id).collect();
+        let index = w.index.parse::<u32>().unwrap_or(0);
+        remaining.sort_by_key(|v| v.index.parse::<u32>().unwrap_or(0).abs_diff(index));
+        select(
+            remaining
+                .first()
+                .map(|v| v.target.as_str())
+                .unwrap_or("essh:0"),
+        )?;
+    }
     call(&["kill-window", "-t", window])?;
+    let _ = call(&["display-message", "Session killed"]);
     Ok(())
 }
 

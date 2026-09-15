@@ -9,6 +9,7 @@ pub struct Details {
     pub load: Option<String>,
     pub mem_total: Option<u64>,
     pub mem_available: Option<u64>,
+    pub mem_cached: Option<u64>,
     pub swap_total: Option<u64>,
     pub swap_free: Option<u64>,
     pub cores: Vec<f64>,
@@ -108,6 +109,7 @@ pub fn parse(raw: &str, old: &str, seconds: f64) -> Details {
         }),
         mem_total: field("MemTotal:"),
         mem_available: field("MemAvailable:"),
+        mem_cached: field("Cached:"),
         swap_total: field("SwapTotal:"),
         swap_free: field("SwapFree:"),
         disks: crate::monitor::parser::parse_df(get("FILESYSTEMS"))

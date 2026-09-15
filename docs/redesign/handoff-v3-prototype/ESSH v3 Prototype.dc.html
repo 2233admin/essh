@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" />
+<style>
+  html,body{margin:0;padding:0;background:#050708;}
+  *{box-sizing:border-box;}
+  a{color:#4fd1c5;text-decoration:none;}
+  a:hover{color:#8ae6dd;}
+  @keyframes blink{0%,49%{opacity:1}50%,100%{opacity:0}}
+</style>
+</helmet>
+<div onClick="{{ focus }}" tabIndex="0" style="font-family:'JetBrains Mono',ui-monospace,monospace;background:#050708;padding:28px;min-height:100vh;display:flex;flex-direction:column;align-items:center;gap:14px;outline:none">
+
+  <div style="width:1180px;display:flex;align-items:center;gap:10px;color:#3f4b52;font-size:11px;letter-spacing:.14em;text-transform:uppercase">
+    <span>essh v3 — interactive prototype</span>
+    <span style="flex:1;height:1px;background:#14191d"></span>
+    <span style="color:#6b7c8a;text-transform:none;letter-spacing:0">click the terminal, then use the keys · prefix is Ctrl+A (or press ` )</span>
+  </div>
+
+  <div style="width:1180px;height:640px;border:1px solid #1c2429;background:#080b0d;display:flex;flex-direction:column;font-size:13px;line-height:1.5;position:relative;overflow:hidden">
+
+    <!-- ══════ HOSTS ══════ -->
+    <sc-if value="{{ isHosts }}" hint-placeholder-val="{{ true }}">
+    <div style="flex:1;display:flex;flex-direction:column;padding:14px 18px 8px;min-height:0">
+      <div style="display:flex;align-items:center;gap:14px;color:#4fd1c5;margin-bottom:12px">
+        <span style="font-weight:700">essh</span>
+        <span style="color:#2a3439">│</span>
+        <span style="color:#8b9aa6">{{ hostCount }} hosts</span>
+        <span style="color:#2a3439">·</span>
+        <span style="color:#8b9aa6">{{ sessionCount }} sessions</span>
+        <sc-if value="{{ filtering }}"><span style="margin-left:auto;color:#cbd5dd">/ {{ filterText }}<span style="display:inline-block;width:7px;height:13px;background:#4fd1c5;vertical-align:-2px;animation:blink 1s step-end infinite"></span></span></sc-if>
+        <sc-if value="{{ notFiltering }}"><span style="margin-left:auto;color:#5b6b7a">{{ filterHint }}</span></sc-if>
+      </div>
+
+      <div style="display:grid;grid-template-columns:14px 16ch 24ch 5ch 16ch 1fr;gap:0 16px;align-items:center;white-space:nowrap">
+        <div></div>
+        <div style="color:#5b6b7a">HOST</div>
+        <div style="color:#5b6b7a">USER@ADDRESS</div>
+        <div style="color:#5b6b7a;text-align:right">TMUX</div>
+        <div style="color:#5b6b7a">LATENCY</div>
+        <div style="color:#5b6b7a">LAST</div>
+        <div style="grid-column:1/-1;height:1px;background:#14191d;margin:6px 0 4px"></div>
+        <sc-for list="{{ hostRows }}" as="h" hint-placeholder-count="10">
+          <div onClick="{{ h.select }}" onDoubleClick="{{ h.connect }}" style="grid-column:1/-1;display:grid;grid-template-columns:14px 16ch 24ch 5ch 16ch 1fr;gap:0 16px;align-items:center;margin:0 -10px;padding:1px 10px;cursor:pointer;background:{{ h.bg }};box-shadow:{{ h.marker }}">
+            <div style="color:{{ h.dotColor }}">{{ h.dot }}</div>
+            <div style="color:{{ h.nameColor }};font-weight:{{ h.nameWeight }}">{{ h.name }}</div>
+            <div style="color:{{ h.addrColor }}">{{ h.user }}@{{ h.addr }}</div>
+            <div style="text-align:right;color:{{ h.tmuxColor }}">{{ h.tmux }}</div>
+            <sc-if value="{{ h.up }}" hint-placeholder-val="{{ true }}"><div style="display:flex;gap:8px;align-items:baseline"><span style="color:#35d07f;letter-spacing:-1px">{{ h.spark }}</span><span style="color:{{ h.addrColor }};font-size:12px">{{ h.rtt }}ms</span></div></sc-if>
+            <sc-if value="{{ h.down }}"><div style="font-size:12px;color:{{ h.dotColor }}">{{ h.downText }}</div></sc-if>
+            <div style="color:{{ h.lastColor }}">{{ h.last }}</div>
+          </div>
+        </sc-for>
+        <sc-if value="{{ noMatches }}"><div style="grid-column:1/-1;color:#3f4b52;padding:8px 0">no hosts match "{{ filterText }}"</div></sc-if>
+      </div>
+
+      <div style="margin-top:auto;display:flex;gap:20px;color:#3f4b52;font-size:12px;padding-top:12px">
+        <span><span style="color:#8b9aa6">⏎</span> connect</span>
+        <span><span style="color:#8b9aa6">a</span> add host</span>
+        <span><span style="color:#8b9aa6">e</span> edit</span>
+        <span><span style="color:#8b9aa6">/</span> filter</span>
+        <span><span style="color:#8b9aa6">h</span> health</span>
+        <span><span style="color:#8b9aa6">?</span> help</span>
+        <span><span style="color:#8b9aa6">q</span> quit</span>
+        <span style="margin-left:auto">TMUX = windows open on that host · sessions keep running after quit</span>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ══════ SESSION ══════ -->
+    <sc-if value="{{ isSession }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:1;display:grid;grid-template-columns:{{ sessionCols }};min-height:0">
+      <div style="padding:12px 18px;color:#cbd5dd;overflow:hidden;line-height:1.6;display:flex;flex-direction:column;justify-content:flex-end;min-width:0">
+        <sc-for list="{{ scrollback }}" as="l" hint-placeholder-count="3">
+          <div style="color:{{ l.color }};white-space:pre-wrap;word-break:break-all">{{ l.text }}</div>
+        </sc-for>
+        <sc-if value="{{ promptLive }}"><div><span style="color:#35d07f">{{ promptUser }}</span><span style="color:#3f4b52">:</span><span style="color:#4fd1c5">~</span><span style="color:#3f4b52">$</span> <span style="color:#cbd5dd">{{ typed }}</span><span style="display:inline-block;width:8px;height:14px;background:#4fd1c5;vertical-align:-2px;animation:blink 1s step-end infinite"></span></div></sc-if>
+        <sc-if value="{{ promptDead }}"><div style="color:#ef5f52;margin-top:6px">── connection to {{ activeHostName }} lost · tmux session alive · <span style="color:#4fd1c5">r</span> reconnect ──</div></sc-if>
+      </div>
+
+      <sc-if value="{{ stripHalf }}">
+      <div style="border-left:1px solid #1c2429;padding:12px 16px;display:flex;flex-direction:column;font-size:12px;min-width:0;overflow:hidden">
+        <div style="display:flex;align-items:center;gap:12px;color:#4fd1c5;margin-bottom:12px;font-size:13px">
+          <span style="color:{{ hDotColor }}">{{ hDot }}</span><span style="font-weight:700">{{ hName }}</span><span style="color:#5b6b7a">{{ hUser }}@{{ hAddr }}</span>
+          <span style="margin-left:auto;color:#5b6b7a">up {{ hUptime }}</span>
+        </div>
+        <sc-if value="{{ hUp }}" hint-placeholder-val="{{ true }}">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 20px">
+          <div><div style="display:flex;justify-content:space-between"><span style="color:#5b6b7a">RX</span><span style="color:#35d07f">{{ hRx }}</span></div><div style="color:#35d07f;font-size:18px;line-height:1;letter-spacing:-1px;white-space:nowrap;overflow:hidden;margin-top:4px">{{ hRxSparkHalf }}</div></div>
+          <div><div style="display:flex;justify-content:space-between"><span style="color:#5b6b7a">TX</span><span style="color:#4fd1c5">{{ hTx }}</span></div><div style="color:#4fd1c5;font-size:18px;line-height:1;letter-spacing:-1px;white-space:nowrap;overflow:hidden;margin-top:4px">{{ hTxSparkHalf }}</div></div>
+        </div>
+        <div style="height:1px;background:#14191d;margin:12px 0"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 20px">
+          <div style="display:grid;grid-template-columns:5ch 1fr 5ch;gap:7px 10px;align-items:center;color:#8b9aa6;align-content:start">
+            <span style="color:#5b6b7a">cpu</span><div style="height:6px;background:#14191d"><div style="height:100%;background:#35d07f;width:{{ hCpuW }}"></div></div><span style="text-align:right">{{ hCpu }}%</span>
+            <span></span><div style="color:#35d07f;letter-spacing:-1px;white-space:nowrap;overflow:hidden;font-size:14px;line-height:1">{{ hCpuSpark }}</div><span></span>
+            <span style="color:#5b6b7a">mem</span><div style="height:6px;background:#14191d"><div style="height:100%;background:#35d07f;width:{{ hMemW }}"></div></div><span style="text-align:right">{{ hMem }}%</span>
+            <span style="color:#5b6b7a">load</span><span style="color:#cbd5dd;grid-column:2/4">{{ hLoad }}</span>
+          </div>
+          <div style="display:grid;grid-template-columns:8ch 1fr 5ch;gap:7px 10px;align-items:center;color:#8b9aa6;align-content:start">
+            <span style="color:#5b6b7a">/</span><div style="height:6px;background:#14191d"><div style="height:100%;background:#35d07f;width:{{ hDiskW }}"></div></div><span style="text-align:right">{{ hDisk }}%</span>
+            <span style="color:#5b6b7a">/backups</span><div style="height:6px;background:#14191d"><div style="height:100%;background:#35d07f;width:{{ hDisk2W }}"></div></div><span style="text-align:right">{{ hDisk2 }}%</span>
+            <span style="color:#5b6b7a">/var/log</span><div style="height:6px;background:#14191d"><div style="height:100%;background:#35d07f;width:{{ hDisk3W }}"></div></div><span style="text-align:right">{{ hDisk3 }}%</span>
+            <span style="color:#5b6b7a">rtt</span><span style="color:#35d07f;letter-spacing:-1px;white-space:nowrap;overflow:hidden">{{ hRttSpark }}</span><span style="text-align:right">{{ hRtt }}ms</span>
+          </div>
+        </div>
+        <div style="height:1px;background:#14191d;margin:12px 0"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 20px">
+          <div style="display:grid;grid-template-columns:1fr 6ch 6ch;gap:3px 8px;color:#8b9aa6;align-content:start">
+            <span style="color:#5b6b7a">PEER</span><span style="color:#5b6b7a;text-align:right">RX</span><span style="color:#5b6b7a;text-align:right">TX</span>
+            <sc-for list="{{ hPeers }}" as="p" hint-placeholder-count="4"><span style="color:#cbd5dd">{{ p.addr }}</span><span style="text-align:right">{{ p.rx }}</span><span style="text-align:right">{{ p.tx }}</span></sc-for>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 5ch 7ch;gap:3px 8px;color:#8b9aa6;align-content:start">
+            <span style="color:#5b6b7a">COMMAND</span><span style="color:#5b6b7a;text-align:right">CPU</span><span style="color:#5b6b7a;text-align:right">RSS</span>
+            <sc-for list="{{ hProcs }}" as="p" hint-placeholder-count="4"><span style="color:#cbd5dd;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ p.cmd }}</span><span style="text-align:right">{{ p.cpu }}</span><span style="text-align:right">{{ p.rss }}</span></sc-for>
+          </div>
+        </div>
+        </sc-if>
+        <sc-if value="{{ hDown }}"><div style="color:#5b6b7a">{{ hDownText }} · last reading, not live</div></sc-if>
+        <div style="margin-top:auto;color:#3f4b52;font-size:11px"><span style="color:#8b9aa6">^A m</span> hide · <span style="color:#8b9aa6">^A h</span> full page</div>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ stripOn }}">
+      <div style="border-left:1px solid #1c2429;padding:10px 14px;display:flex;flex-direction:column;gap:14px;font-size:12px;min-width:0">
+        <div style="color:#4fd1c5;display:flex;justify-content:space-between"><span style="font-weight:700">{{ activeHostName }}</span><span style="color:#5b6b7a">eth0</span></div>
+        <div>
+          <div style="display:flex;justify-content:space-between"><span style="color:#5b6b7a">RX</span><span style="color:#35d07f">{{ rx }}</span></div>
+          <div style="color:#35d07f;font-size:15px;line-height:1;letter-spacing:-1px;white-space:nowrap;overflow:hidden">{{ rxSpark }}</div>
+        </div>
+        <div>
+          <div style="display:flex;justify-content:space-between"><span style="color:#5b6b7a">TX</span><span style="color:#4fd1c5">{{ tx }}</span></div>
+          <div style="color:#4fd1c5;font-size:15px;line-height:1;letter-spacing:-1px;white-space:nowrap;overflow:hidden">{{ txSpark }}</div>
+        </div>
+        <div style="height:1px;background:#14191d"></div>
+        <div style="display:grid;grid-template-columns:5ch 1fr 5ch;gap:6px 10px;align-items:center;color:#8b9aa6">
+          <span style="color:#5b6b7a">cpu</span><div style="height:6px;background:#14191d"><div style="height:100%;background:#35d07f;width:{{ cpuW }}"></div></div><span style="text-align:right">{{ cpu }}%</span>
+          <span style="color:#5b6b7a">mem</span><div style="height:6px;background:#14191d"><div style="height:100%;background:#35d07f;width:{{ memW }}"></div></div><span style="text-align:right">{{ mem }}%</span>
+          <span style="color:#5b6b7a">disk</span><div style="height:6px;background:#14191d"><div style="height:100%;background:#35d07f;width:{{ diskW }}"></div></div><span style="text-align:right">{{ disk }}%</span>
+          <span style="color:#5b6b7a">rtt</span><span style="color:#35d07f;letter-spacing:-1px;overflow:hidden;white-space:nowrap">{{ rttSpark }}</span><span style="text-align:right">{{ rttNow }}ms</span>
+        </div>
+        <div style="height:1px;background:#14191d"></div>
+        <div style="display:grid;grid-template-columns:1fr 6ch 6ch;gap:4px 8px;color:#8b9aa6">
+          <span style="color:#5b6b7a">PEER</span><span style="color:#5b6b7a;text-align:right">RX</span><span style="color:#5b6b7a;text-align:right">TX</span>
+          <sc-for list="{{ peers }}" as="p" hint-placeholder-count="4">
+            <span style="color:#cbd5dd">{{ p.addr }}</span><span style="text-align:right">{{ p.rx }}</span><span style="text-align:right">{{ p.tx }}</span>
+          </sc-for>
+        </div>
+        <div style="margin-top:auto;color:#3f4b52;font-size:11px"><span style="color:#8b9aa6">^A m</span> half · <span style="color:#8b9aa6">^A h</span> full page</div>
+      </div>
+      </sc-if>
+    </div>
+    </sc-if>
+
+    <!-- ══════ HEALTH (single host) ══════ -->
+    <sc-if value="{{ isHealth }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:1;display:flex;flex-direction:column;padding:14px 18px 8px;min-height:0;font-size:12px">
+      <div style="display:flex;align-items:center;gap:14px;color:#4fd1c5;margin-bottom:14px;font-size:13px">
+        <span style="color:{{ hDotColor }}">{{ hDot }}</span>
+        <span style="font-weight:700">{{ hName }}</span>
+        <span style="color:#5b6b7a">{{ hUser }}@{{ hAddr }}</span>
+        <span style="color:#2a3439">│</span>
+        <span style="color:#8b9aa6">{{ hStateText }}</span>
+        <span style="color:#2a3439">·</span>
+        <span style="color:#8b9aa6">{{ hSessions }} tmux</span>
+        <span style="margin-left:auto;color:#5b6b7a"><span style="color:#8b9aa6">←→</span> other host</span>
+      </div>
+
+      <sc-if value="{{ hUp }}" hint-placeholder-val="{{ true }}">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 28px">
+        <div>
+          <div style="display:flex;justify-content:space-between"><span style="color:#5b6b7a">RX eth0</span><span style="color:#35d07f">{{ hRx }}</span></div>
+          <div style="color:#35d07f;font-size:22px;line-height:1;letter-spacing:-1px;white-space:nowrap;overflow:hidden;margin-top:4px">{{ hRxSpark }}</div>
+        </div>
+        <div>
+          <div style="display:flex;justify-content:space-between"><span style="color:#5b6b7a">TX eth0</span><span style="color:#4fd1c5">{{ hTx }}</span></div>
+          <div style="color:#4fd1c5;font-size:22px;line-height:1;letter-spacing:-1px;white-space:nowrap;overflow:hidden;margin-top:4px">{{ hTxSpark }}</div>
+        </div>
+      </div>
+
+      <div style="height:1px;background:#14191d;margin:16px 0"></div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 28px">
+        <div style="display:grid;grid-template-columns:5ch 1fr 5ch;gap:8px 10px;align-items:center;color:#8b9aa6;align-content:start">
+          <span style="color:#5b6b7a">cpu</span><div style="height:6px;background:#14191d"><div style="height:100%;background:#35d07f;width:{{ hCpuW }}"></div></div><span style="text-align:right">{{ hCpu }}%</span>
+          <span></span><div style="color:#35d07f;letter-spacing:-1px;white-space:nowrap;overflow:hidden;font-size:14px;line-height:1">{{ hCpuSpark }}</div><span></span>
+          <span style="color:#5b6b7a">load</span><span style="color:#cbd5dd;grid-column:2/4">{{ hLoad }}</span>
+          <span style="color:#5b6b7a">up</span><span style="color:#cbd5dd;grid-column:2/4">{{ hUptime }}</span>
+        </div>
+        <div style="display:grid;grid-template-columns:5ch 1fr 5ch;gap:8px 10px;align-items:center;color:#8b9aa6;align-content:start">
+          <span style="color:#5b6b7a">mem</span><div style="height:6px;background:#14191d"><div style="height:100%;background:#35d07f;width:{{ hMemW }}"></div></div><span style="text-align:right">{{ hMem }}%</span>
+          <span></span><span style="color:#5b6b7a;grid-column:2/4">{{ hMemText }}</span>
+          <span style="color:#5b6b7a">swap</span><div style="height:6px;background:#14191d"><div style="height:100%;background:#35d07f;width:0%"></div></div><span style="text-align:right">0%</span>
+          <span style="color:#5b6b7a">rtt</span><span style="color:#35d07f;letter-spacing:-1px;white-space:nowrap;overflow:hidden">{{ hRttSpark }}</span><span style="text-align:right">{{ hRtt }}ms</span>
+        </div>
+        <div style="display:grid;grid-template-columns:8ch 1fr 5ch;gap:8px 10px;align-items:center;color:#8b9aa6;align-content:start">
+          <span style="color:#5b6b7a">/</span><div style="height:6px;background:#14191d"><div style="height:100%;background:#35d07f;width:{{ hDiskW }}"></div></div><span style="text-align:right">{{ hDisk }}%</span>
+          <span style="color:#5b6b7a">/backups</span><div style="height:6px;background:#14191d"><div style="height:100%;background:#35d07f;width:{{ hDisk2W }}"></div></div><span style="text-align:right">{{ hDisk2 }}%</span>
+          <span style="color:#5b6b7a">/var/log</span><div style="height:6px;background:#14191d"><div style="height:100%;background:#35d07f;width:{{ hDisk3W }}"></div></div><span style="text-align:right">{{ hDisk3 }}%</span>
+        </div>
+      </div>
+
+      <div style="height:1px;background:#14191d;margin:16px 0"></div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 28px">
+        <div style="display:grid;grid-template-columns:1fr 7ch 7ch;gap:4px 10px;color:#8b9aa6;align-content:start">
+          <span style="color:#5b6b7a">PEER</span><span style="color:#5b6b7a;text-align:right">RX</span><span style="color:#5b6b7a;text-align:right">TX</span>
+          <sc-for list="{{ hPeers }}" as="p" hint-placeholder-count="4">
+            <span style="color:#cbd5dd">{{ p.addr }}</span><span style="text-align:right">{{ p.rx }}</span><span style="text-align:right">{{ p.tx }}</span>
+          </sc-for>
+        </div>
+        <div style="display:grid;grid-template-columns:6ch 1fr 6ch 7ch;gap:4px 10px;color:#8b9aa6;align-content:start">
+          <span style="color:#5b6b7a;text-align:right">PID</span><span style="color:#5b6b7a">COMMAND</span><span style="color:#5b6b7a;text-align:right">CPU</span><span style="color:#5b6b7a;text-align:right">RSS</span>
+          <sc-for list="{{ hProcs }}" as="p" hint-placeholder-count="4">
+            <span style="color:#5b6b7a;text-align:right">{{ p.pid }}</span><span style="color:#cbd5dd">{{ p.cmd }}</span><span style="text-align:right">{{ p.cpu }}</span><span style="text-align:right">{{ p.rss }}</span>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ hDown }}">
+      <div style="flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:8px;color:#5b6b7a">
+        <div style="color:{{ hDotColor }};font-size:13px">{{ hDownText }}</div>
+        <div>last reading: cpu 9% · mem 41% · rtt 6ms — not live</div>
+        <sc-if value="{{ hHasSessions }}"><div style="color:#8b9aa6">{{ hSessions }} tmux session(s) still alive on the host · <span style="color:#4fd1c5">r</span> reconnect</div></sc-if>
+      </div>
+      </sc-if>
+
+      <div style="margin-top:auto;display:flex;gap:20px;color:#3f4b52;padding-top:12px">
+        <span><span style="color:#8b9aa6">←→</span> other host</span>
+        <span><span style="color:#8b9aa6">⏎</span> connect</span>
+        <span><span style="color:#8b9aa6">r</span> reconnect</span>
+        <span><span style="color:#8b9aa6">Esc</span> back</span>
+        <span style="margin-left:auto">numbers only — no thresholds, no alerts</span>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ══════ POPUP: SWITCHER ══════ -->
+    <sc-if value="{{ popSwitch }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;inset:0 0 26px 0;background:rgba(5,7,8,.72);display:flex;align-items:center;justify-content:center">
+      <div style="width:560px;border:1px solid #4fd1c5;background:#080b0d;box-shadow:0 20px 60px -10px #000">
+        <div style="display:flex;justify-content:space-between;padding:8px 14px;border-bottom:1px solid #1c2429;color:#4fd1c5"><span style="font-weight:700">switch</span><span style="color:#5b6b7a">^A s</span></div>
+        <div style="padding:6px 0">
+          <sc-for list="{{ switchRows }}" as="s" hint-placeholder-count="4">
+            <div onClick="{{ s.go }}" style="display:grid;grid-template-columns:4ch 14ch 1fr 8ch;gap:4px 14px;padding:3px 14px;cursor:pointer;background:{{ s.bg }};box-shadow:{{ s.marker }}">
+              <span style="color:#4fd1c5;font-weight:{{ s.weight }}">{{ s.n }}</span><span style="color:{{ s.hostColor }}">{{ s.host }}</span><span style="color:{{ s.cmdColor }}">{{ s.cmd }}</span><span style="text-align:right;color:{{ s.statusColor }}">{{ s.status }}</span>
+            </div>
+          </sc-for>
+          <sc-if value="{{ noSessions }}"><div style="padding:6px 14px;color:#3f4b52">no sessions yet</div></sc-if>
+          <div style="height:1px;background:#14191d;margin:4px 14px"></div>
+          <div onClick="{{ closeAndHosts }}" style="display:grid;grid-template-columns:4ch 14ch 1fr 8ch;gap:4px 14px;padding:3px 14px;cursor:pointer"><span style="color:#5b6b7a">n</span><span style="color:#8b9aa6">new…</span><span style="color:#5b6b7a">pick a host</span><span></span></div>
+        </div>
+        <div style="padding:8px 14px;border-top:1px solid #1c2429;color:#3f4b52;font-size:12px;display:flex;gap:16px"><span><span style="color:#8b9aa6">1–9</span> jump</span><span><span style="color:#8b9aa6">↑↓</span> move</span><span><span style="color:#8b9aa6">⏎</span> switch</span><span><span style="color:#8b9aa6">x</span> kill</span><span><span style="color:#8b9aa6">Esc</span> close</span></div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ══════ POPUP: HELP ══════ -->
+    <sc-if value="{{ popHelp }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;inset:0 0 26px 0;background:#080b0d;padding:14px 18px;display:flex;flex-direction:column">
+      <div style="color:#4fd1c5;font-weight:700;margin-bottom:6px">essh keys</div>
+      <div style="color:#5b6b7a;font-size:12px;margin-bottom:18px">essh is tmux underneath. Every tmux key still works; these are the ones you need. Prefix is <span style="color:#4fd1c5">Ctrl+A</span> — in this prototype the backtick <span style="color:#4fd1c5">`</span> also arms the prefix.</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:26px;font-size:12.5px">
+        <div>
+          <div style="color:#cbd5dd;margin-bottom:8px">HOST LIST</div>
+          <div style="display:grid;grid-template-columns:8ch 1fr;gap:5px 12px;color:#8b9aa6">
+            <span style="color:#4fd1c5">↑↓ jk</span><span>move</span>
+            <span style="color:#4fd1c5">⏎</span><span>connect (or reattach)</span>
+            <span style="color:#4fd1c5">/</span><span>filter</span>
+            <span style="color:#4fd1c5">a</span><span>add host</span>
+            <span style="color:#4fd1c5">e</span><span>edit host</span>
+            <span style="color:#4fd1c5">q</span><span>quit — sessions keep running</span>
+          </div>
+        </div>
+        <div>
+          <div style="color:#cbd5dd;margin-bottom:8px">IN A SESSION</div>
+          <div style="display:grid;grid-template-columns:8ch 1fr;gap:5px 12px;color:#8b9aa6">
+            <span style="color:#4fd1c5">^A 1–9</span><span>jump to session</span>
+            <span style="color:#4fd1c5">^A s</span><span>switcher</span>
+            <span style="color:#4fd1c5">^A n</span><span>new session on a host</span>
+            <span style="color:#4fd1c5">^A m</span><span>strip → half → off</span>
+            <span style="color:#4fd1c5">^A h</span><span>health of this host</span>
+            <span style="color:#4fd1c5">^A d</span><span>back to host list</span>
+            <span style="color:#4fd1c5">^A x</span><span>kill this session</span>
+          </div>
+        </div>
+        <div>
+          <div style="color:#cbd5dd;margin-bottom:8px">STATUS BAR</div>
+          <div style="color:#8b9aa6;line-height:1.7">
+            <div><span style="color:#35d07f">●</span> reachable</div>
+            <div><span style="color:#ef5f52">●</span> unreachable, session alive</div>
+            <div><span style="color:#3f4b52">○</span> offline, no session</div>
+            <div style="margin-top:8px;color:#5b6b7a">Right side: current host's rx/tx and rtt. Nothing else.</div>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:auto;color:#3f4b52;font-size:12px"><span style="color:#8b9aa6">Esc</span> close · try in the terminal: <span style="color:#8b9aa6">uptime · df -h · ls · top · clear</span></div>
+    </div>
+    </sc-if>
+
+    <!-- ══════ POPUP: ADD / EDIT HOST ══════ -->
+    <sc-if value="{{ popForm }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;inset:0 0 26px 0;background:rgba(5,7,8,.72);display:flex;align-items:center;justify-content:center">
+      <div style="width:480px;border:1px solid #4fd1c5;background:#080b0d;box-shadow:0 20px 60px -10px #000">
+        <div style="display:flex;justify-content:space-between;padding:8px 14px;border-bottom:1px solid #1c2429;color:#4fd1c5"><span style="font-weight:700">{{ formTitle }}</span><span style="color:#5b6b7a">⇥ next field</span></div>
+        <div style="padding:12px 14px;display:grid;grid-template-columns:8ch 1fr;gap:10px 14px;align-items:center">
+          <sc-for list="{{ formRows }}" as="f" hint-placeholder-count="3">
+            <span style="color:#5b6b7a">{{ f.label }}</span>
+            <div style="padding:3px 8px;border:1px solid {{ f.border }};color:#cbd5dd;min-height:24px">{{ f.value }}<sc-if value="{{ f.active }}"><span style="display:inline-block;width:7px;height:13px;background:#4fd1c5;vertical-align:-2px;animation:blink 1s step-end infinite"></span></sc-if></div>
+          </sc-for>
+        </div>
+        <div style="padding:8px 14px;border-top:1px solid #1c2429;color:#3f4b52;font-size:12px;display:flex;gap:16px"><span><span style="color:#8b9aa6">⏎</span> save</span><span><span style="color:#8b9aa6">Esc</span> cancel</span><span style="margin-left:auto;color:#5b6b7a">{{ formHint }}</span></div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ══════ POPUP: CONFIRM ══════ -->
+    <sc-if value="{{ popConfirm }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;inset:0 0 26px 0;background:rgba(5,7,8,.72);display:flex;align-items:center;justify-content:center">
+      <div style="width:420px;border:1px solid #ef5f52;background:#080b0d;box-shadow:0 20px 60px -10px #000;padding:14px">
+        <div style="color:#cbd5dd;margin-bottom:6px">{{ confirmText }}</div>
+        <div style="color:#5b6b7a;font-size:12px">{{ confirmSub }}</div>
+        <div style="margin-top:12px;color:#3f4b52;font-size:12px;display:flex;gap:16px"><span><span style="color:#ef5f52">y</span> yes</span><span><span style="color:#8b9aa6">Esc</span> no</span></div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ══════ QUIT ══════ -->
+    <sc-if value="{{ isQuit }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;inset:0;background:#050708;padding:20px 24px;color:#8b9aa6;line-height:1.7">
+      <div>[detached from essh]</div>
+      <div style="color:#5b6b7a">{{ sessionCount }} tmux sessions still running on {{ liveHostCount }} hosts. Run <span style="color:#cbd5dd">essh</span> to come back.</div>
+      <div style="height:10px"></div>
+      <div><span style="color:#35d07f">matt@laptop</span><span style="color:#3f4b52">:</span><span style="color:#4fd1c5">~</span><span style="color:#3f4b52">$</span> <span style="display:inline-block;width:8px;height:14px;background:#8b9aa6;vertical-align:-2px;animation:blink 1s step-end infinite"></span></div>
+      <div style="position:absolute;bottom:16px;left:24px;color:#3f4b52;font-size:12px">press any key to relaunch essh</div>
+    </div>
+    </sc-if>
+
+    <!-- ══════ toast ══════ -->
+    <sc-if value="{{ hasToast }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;right:14px;top:12px;border:1px solid #1c2429;background:#0d1316;color:#cbd5dd;padding:5px 12px;font-size:12px">{{ toast }}</div>
+    </sc-if>
+
+    <!-- ══════ prefix indicator ══════ -->
+    <sc-if value="{{ prefixArmed }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;left:50%;bottom:34px;transform:translateX(-50%);border:1px solid #4fd1c5;background:#080b0d;color:#4fd1c5;padding:3px 12px;font-size:12px">^A — waiting for key: <span style="color:#8b9aa6">1–9 s n m h d x ?</span></div>
+    </sc-if>
+
+    <!-- ══════ status bar ══════ -->
+    <sc-if value="{{ notQuit }}" hint-placeholder-val="{{ true }}">
+    <div style="display:flex;align-items:center;height:26px;background:#0d1316;border-top:1px solid #1c2429;font-size:12px;padding:0 10px;gap:2px;white-space:nowrap;overflow:hidden">
+      <span style="color:#4fd1c5;font-weight:700;padding:0 8px 0 2px">essh</span>
+      <span onClick="{{ goHosts }}" style="padding:0 8px;cursor:pointer;background:{{ hostsChipBg }};color:{{ hostsChipColor }}">hosts</span>
+      <span onClick="{{ goHealth }}" style="padding:0 8px;cursor:pointer;background:{{ healthChipBg }};color:{{ healthChipColor }}">health</span>
+      <span style="padding:0 8px;color:#5b6b7a">│</span>
+      <sc-for list="{{ chips }}" as="c" hint-placeholder-count="4">
+        <span onClick="{{ c.go }}" style="padding:0 8px;cursor:pointer;background:{{ c.bg }};color:{{ c.color }};border-bottom:{{ c.border }}">{{ c.n }} {{ c.host }}<span style="color:{{ c.dotColor }}"> ●</span></span>
+      </sc-for>
+      <span style="margin-left:auto;display:flex;gap:16px;color:#5b6b7a">
+        <sc-if value="{{ hasActive }}"><span><span style="color:#35d07f">↓</span> {{ rxShort }} <span style="color:#4fd1c5">↑</span> {{ txShort }}</span><span>rtt {{ rttNow }}ms</span></sc-if>
+        <span style="color:#8b9aa6">{{ clock }}</span>
+      </span>
+    </div>
+    </sc-if>
+  </div>
+
+  <div style="width:1180px;color:#3f4b52;font-size:12px;display:flex;gap:22px;flex-wrap:wrap">
+    <span><span style="color:#8b9aa6">Try:</span> j/k then ⏎ to connect</span>
+    <span>type <span style="color:#8b9aa6">uptime</span> ⏎ in the session</span>
+    <span><span style="color:#8b9aa6">` m</span> strip / half</span>
+    <span><span style="color:#8b9aa6">` s</span> switcher</span>
+    <span><span style="color:#8b9aa6">` n</span> new session</span>
+    <span><span style="color:#8b9aa6">` d</span> host list</span>
+    <span><span style="color:#8b9aa6">h</span> health</span>
+    <span><span style="color:#8b9aa6">/</span> filter</span>
+    <span><span style="color:#8b9aa6">a</span> add host</span>
+    <span><span style="color:#8b9aa6">q</span> quit</span>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1240,&quot;height&quot;:760}}">
+class Component extends DCLogic {
+  constructor(p) {
+    super(p);
+    const saved = (() => { try { return JSON.parse(localStorage.getItem("essh-v3-proto") || "null"); } catch (e) { return null; } })();
+    this.state = saved || {
+      screen: "hosts", popup: null, sel: 1, active: null, strip: false, prefix: false,
+      filter: null, typed: "", toast: null, form: null, confirm: null, swSel: 0,
+      hosts: [
+        { name: "web-01", user: "matt", addr: "10.0.1.11", state: "up", rtt: 4, last: "2d ago" },
+        { name: "web-02", user: "matt", addr: "10.0.1.12", state: "up", rtt: 4, last: "yesterday" },
+        { name: "web-03", user: "matt", addr: "10.0.1.13", state: "up", rtt: 6, last: "yesterday" },
+        { name: "db-01", user: "matt", addr: "10.0.1.14", state: "up", rtt: 5, last: "3h ago" },
+        { name: "db-02", user: "matt", addr: "10.0.1.15", state: "up", rtt: 7, last: "3d ago" },
+        { name: "cache-01", user: "matt", addr: "10.0.1.16", state: "up", rtt: 3, last: "1w ago" },
+        { name: "edge-01", user: "matt", addr: "203.0.113.7", state: "unreachable", rtt: 0, last: "6m ago", down: "unreachable 6m" },
+        { name: "build-01", user: "matt", addr: "10.0.1.18", state: "up", rtt: 5, last: "5d ago" },
+        { name: "monitor-01", user: "matt", addr: "10.0.1.19", state: "up", rtt: 4, last: "2w ago" },
+        { name: "staging-web-01", user: "matt", addr: "10.0.2.20", state: "offline", rtt: 0, last: "since 12:10", down: "offline" }
+      ],
+      sessions: [
+        { host: "db-01", cmd: "pg_dump", age: "42m", lines: [["$ pg_dump -Fc orders > /backups/orders.dump", "#8b9aa6"], ["dumping table events … 78%", "#cbd5dd"]] },
+        { host: "db-01", cmd: "bash", age: "idle 18m", lines: [] },
+        { host: "edge-01", cmd: "tail -f", age: "6m", lines: [["$ tail -f /var/log/edge/access.log", "#8b9aa6"], ["203.0.113.40 GET /v1/ping 200", "#8b9aa6"], ["203.0.113.41 GET /v1/ping 200", "#8b9aa6"]] }
+      ]
+    };
+    if (this.state.screen === "health" && this.state.sel === undefined) this.state.sel = 0;
+    this.t = 0;
+    this.hist = {};
+  }
+
+  componentDidMount() {
+    this.onKey = (e) => this.key(e);
+    window.addEventListener("keydown", this.onKey);
+    this.tick = setInterval(() => { this.t++; this.forceUpdate(); }, 1000);
+  }
+  componentWillUnmount() { window.removeEventListener("keydown", this.onKey); clearInterval(this.tick); }
+
+  set(patch) {
+    this.setState(patch, () => {
+      const s = { ...this.state, prefix: false, toast: null };
+      try { localStorage.setItem("essh-v3-proto", JSON.stringify(s)); } catch (e) {}
+    });
+  }
+  say(msg) { this.set({ toast: msg }); clearTimeout(this.tt); this.tt = setTimeout(() => this.set({ toast: null }), 1800); }
+
+  visibleHosts(filter) {
+    const f = (filter !== undefined ? filter : this.state.filter || "").toLowerCase();
+    return this.state.hosts.map((h, i) => ({ ...h, i })).filter(h => !f || h.name.includes(f) || h.addr.includes(f));
+  }
+  windowsOn(name) { return this.state.sessions.filter(s => s.host === name).length; }
+  hostIndexOfActive() {
+    const a = this.state.active !== null ? this.state.sessions[this.state.active] : null;
+    const i = a ? this.state.hosts.findIndex(x => x.name === a.host) : -1;
+    return i < 0 ? this.state.sel : i;
+  }
+  reconnect(name) {
+    const hosts = this.state.hosts.map(x => x.name === name ? { ...x, state: "up", rtt: 9, down: undefined } : x);
+    this.set({ hosts }); this.say("reconnected to " + name);
+  }
+
+  connect(i) {
+    const h = this.state.hosts[i];
+    if (!h || h.state === "offline") { this.say(h ? h.name + " is offline" : ""); return; }
+    let idx = this.state.sessions.findIndex(s => s.host === h.name);
+    let sessions = this.state.sessions;
+    if (idx < 0) {
+      sessions = [...sessions, { host: h.name, cmd: "bash", age: "now", lines: [["Linux " + h.name + " 6.19.10-300.fc44.x86_64 · last login Tue Sep 15 12:11 from 10.0.0.4", "#5b6b7a"]] }];
+      idx = sessions.length - 1;
+    }
+    const hosts = this.state.hosts.map((x, k) => k === i ? { ...x, last: "attached" } : x);
+    this.set({ sessions, hosts, active: idx, screen: "session", popup: null, filter: null, typed: "" });
+  }
+  newSession() {
+    const h = this.state.hosts[this.state.sel];
+    if (!h || h.state !== "up") { this.say("pick a reachable host first"); this.set({ screen: "hosts", popup: null }); return; }
+    const sessions = [...this.state.sessions, { host: h.name, cmd: "bash", age: "now", lines: [["Linux " + h.name + " 6.19.10-300.fc44.x86_64", "#5b6b7a"]] }];
+    this.set({ sessions, active: sessions.length - 1, screen: "session", popup: null, typed: "" });
+  }
+  kill(idx) {
+    const sessions = this.state.sessions.filter((_, k) => k !== idx);
+    let active = this.state.active;
+    if (active === idx) active = sessions.length ? Math.min(idx, sessions.length - 1) : null;
+    else if (active > idx) active--;
+    this.set({ sessions, active, popup: null, confirm: null, screen: active === null ? "hosts" : this.state.screen, swSel: 0 });
+    this.say("session killed");
+  }
+
+  run(cmd) {
+    const s = this.state.sessions[this.state.active];
+    const h = this.state.hosts.find(x => x.name === s.host);
+    const out = [["matt@" + s.host + ":~$ " + cmd, "#8b9aa6"]];
+    const c = cmd.trim();
+    const word = c.split(" ")[0];
+    const m = this.metrics(h.name);
+    if (c === "clear") { this.patchSession({ lines: [] }); return; }
+    else if (word === "uptime") out.push([" 12:2" + (this.t % 10) + ":0" + (this.t % 6) + " up " + (h.name === "db-01" ? 34 : 12) + " days,  1 user,  load average: " + (m.cpu / 25).toFixed(2) + ", " + (m.cpu / 28).toFixed(2) + ", " + (m.cpu / 30).toFixed(2), "#cbd5dd"]);
+    else if (word === "uname") out.push(["Linux " + h.name + " 6.19.10-300.fc44.x86_64 x86_64 GNU/Linux", "#cbd5dd"]);
+    else if (word === "hostname") out.push([h.name, "#cbd5dd"]);
+    else if (word === "whoami") out.push(["matt", "#cbd5dd"]);
+    else if (word === "pwd") out.push(["/home/matt", "#cbd5dd"]);
+    else if (word === "ls") out.push(["backups  deploy.sh  logs  nginx.conf.bak  NOTES.md  releases", "#cbd5dd"]);
+    else if (word === "df") out.push(["Filesystem      Size  Used Avail Use% Mounted on", "#5b6b7a"], ["/dev/vda1       2.0T  " + Math.round(m.disk * 20) + "G  " + (2000 - Math.round(m.disk * 20)) + "G  " + m.disk + "% /", "#cbd5dd"]);
+    else if (word === "free") out.push(["              total   used   free  buff/cache", "#5b6b7a"], ["Mem:           62Gi  " + Math.round(m.mem * .62) + "Gi  " + Math.round((100 - m.mem) * .62) + "Gi        21Gi", "#cbd5dd"]);
+    else if (word === "top" || word === "htop") out.push(["  PID USER   %CPU %MEM COMMAND", "#5b6b7a"], [" 1555 root    " + (m.cpu * .3).toFixed(1) + "  0.1 nginx: master", "#cbd5dd"], ["   27 matt    0.4  0.1 sshd: matt@pts/0", "#cbd5dd"], ["    1 root    0.0  0.1 systemd", "#cbd5dd"]);
+    else if (word === "tmux") out.push(["essh: you're already inside tmux — use ^A s to switch sessions", "#8b9aa6"]);
+    else if (word === "exit") { this.kill(this.state.active); return; }
+    else if (c === "") out.pop();
+    else out.push(["bash: " + word + ": command not found", "#ef5f52"]);
+    this.patchSession({ lines: [...s.lines, ...out].slice(-40), cmd: c === "" ? s.cmd : word, age: "now" });
+  }
+  patchSession(patch) {
+    const sessions = this.state.sessions.map((s, k) => k === this.state.active ? { ...s, ...patch } : s);
+    this.set({ sessions, typed: "" });
+  }
+
+  seed(name) { let s = 0; for (const ch of name) s = (s * 31 + ch.charCodeAt(0)) % 997; return s; }
+  metrics(name) {
+    const seed = this.seed(name);
+    const w = (k, amp, base) => Math.round(base + amp * (0.5 + 0.5 * Math.sin((this.t + seed) / k)));
+    const busy = name.startsWith("db") ? 45 : name.startsWith("build") ? 60 : 8;
+    return { cpu: w(3.1, 12, busy), mem: 30 + (seed % 40), disk: 15 + (seed % 60), rxk: w(2.3, 6000, 1500 + (seed % 3000)), txk: w(2.9, 900, 300 + (seed % 700)) };
+  }
+  spark(key, val, n, ceil) {
+    const H = this.hist[key] = (this.hist[key] || []);
+    if (H.length === 0 || H[H.length - 1].t !== this.t) { H.push({ t: this.t, v: val }); if (H.length > 44) H.shift(); }
+    const glyphs = "⣀⣄⣤⣶⣿";
+    const win = H.slice(-n);
+    const max = ceil || Math.max(1, ...win.map(x => x.v)) * 1.6;
+    let s = win.map(x => glyphs[Math.min(4, Math.floor(x.v / max * 4.99))]).join("");
+    while (s.length < n) s = "⣀" + s;
+    return s;
+  }
+  fmtRate(k) { return k >= 1000 ? (k / 1000).toFixed(1) + " MB/s" : k + " kB/s"; }
+  fmtShort(k) { return k >= 1000 ? (k / 1000).toFixed(1) + "M" : k + "k"; }
+  peersFor(rk, tk) {
+    return [
+      { addr: "10.0.1.14:5432", rx: this.fmtShort(Math.round(rk * .7)), tx: this.fmtShort(Math.round(tk * .35)) },
+      { addr: "10.0.1.16:6379", rx: this.fmtShort(Math.round(rk * .2)), tx: this.fmtShort(Math.round(tk * .2)) },
+      { addr: "10.0.0.9:443", rx: this.fmtShort(Math.round(rk * .07)), tx: this.fmtShort(Math.round(tk * .32)) },
+      { addr: "10.0.0.4:22", rx: this.fmtShort(Math.round(rk * .03)), tx: this.fmtShort(Math.round(tk * .13)) }
+    ];
+  }
+
+  key(e) {
+    if (e.metaKey) return;
+    const st = this.state;
+    const k = e.key;
+    const stop = () => e.preventDefault();
+
+    if (st.screen === "quit") { stop(); this.set({ screen: "hosts" }); return; }
+
+    if ((e.ctrlKey && k.toLowerCase() === "a") || (k === "\u0060" && !st.popup)) { stop(); this.set({ prefix: !st.prefix }); return; }
+
+    if (st.prefix) {
+      stop();
+      this.set({ prefix: false });
+      if (/^[1-9]$/.test(k)) { const i = +k - 1; if (st.sessions[i]) this.set({ active: i, screen: "session", popup: null }); else this.say("no session " + k); }
+      else if (k === "s") this.set({ popup: "switch", swSel: st.active || 0 });
+      else if (k === "n") this.newSession();
+      else if (k === "m") this.set({ strip: (Number(st.strip) + 1) % 3 });
+      else if (k === "h") this.set({ screen: "health", popup: null, sel: this.hostIndexOfActive() });
+      else if (k === "d") this.set({ screen: "hosts", popup: null });
+      else if (k === "x") { if (st.active !== null) this.set({ popup: "confirm", confirm: st.active }); }
+      else if (k === "?") this.set({ popup: "help" });
+      return;
+    }
+
+    if (st.popup === "help") { if (k === "Escape" || k === "?" || k === "q") { stop(); this.set({ popup: null }); } return; }
+
+    if (st.popup === "confirm") {
+      stop();
+      if (k === "y") this.kill(st.confirm);
+      else if (k === "Escape" || k === "n") this.set({ popup: null, confirm: null });
+      return;
+    }
+
+    if (st.popup === "switch") {
+      stop();
+      const n = st.sessions.length;
+      if (k === "Escape") this.set({ popup: null });
+      else if (/^[1-9]$/.test(k)) { const i = +k - 1; if (st.sessions[i]) this.set({ active: i, screen: "session", popup: null }); }
+      else if (k === "ArrowDown" || k === "j") this.set({ swSel: Math.min(n - 1, st.swSel + 1) });
+      else if (k === "ArrowUp" || k === "k") this.set({ swSel: Math.max(0, st.swSel - 1) });
+      else if (k === "Enter") { if (n) this.set({ active: st.swSel, screen: "session", popup: null }); }
+      else if (k === "x") { if (n) this.set({ popup: "confirm", confirm: st.swSel }); }
+      else if (k === "n") this.set({ popup: null, screen: "hosts" });
+      return;
+    }
+
+    if (st.popup === "form") {
+      stop();
+      const f = st.form;
+      if (k === "Escape") { this.set({ popup: null, form: null }); return; }
+      if (k === "Tab") { this.set({ form: { ...f, field: (f.field + 1) % 3 } }); return; }
+      if (k === "Enter") {
+        const [name, user, addr] = f.values;
+        if (!name || !addr) { this.say("name and address are required"); return; }
+        let hosts;
+        if (f.edit !== null) hosts = st.hosts.map((h, i) => i === f.edit ? { ...h, name, user: user || "root", addr } : h);
+        else hosts = [...st.hosts, { name, user: user || "root", addr, state: "up", rtt: 5 + (name.length % 7), last: "never" }];
+        this.set({ hosts, popup: null, form: null, sel: f.edit !== null ? f.edit : hosts.length - 1 });
+        this.say(f.edit !== null ? "host updated" : "host added");
+        return;
+      }
+      const values = [...f.values];
+      if (k === "Backspace") values[f.field] = values[f.field].slice(0, -1);
+      else if (k.length === 1) values[f.field] += k;
+      else return;
+      this.set({ form: { ...f, values } });
+      return;
+    }
+
+    if (st.screen === "hosts") {
+      const vis = this.visibleHosts();
+      const pos = Math.max(0, vis.findIndex(h => h.i === st.sel));
+      if (st.filter !== null) {
+        if (k === "Escape") { stop(); this.set({ filter: null }); return; }
+        if (k === "Enter") { stop(); if (vis.length) this.connect(vis[pos].i); return; }
+        if (k === "Backspace") { stop(); this.set({ filter: st.filter.slice(0, -1) }); return; }
+        if (k === "ArrowDown") { stop(); if (vis[pos + 1]) this.set({ sel: vis[pos + 1].i }); return; }
+        if (k === "ArrowUp") { stop(); if (vis[pos - 1]) this.set({ sel: vis[pos - 1].i }); return; }
+        if (k.length === 1) { stop(); const f = st.filter + k; const v2 = this.visibleHosts(f); this.set({ filter: f, sel: v2.length ? v2[0].i : st.sel }); }
+        return;
+      }
+      if (k === "j" || k === "ArrowDown") { stop(); if (vis[pos + 1]) this.set({ sel: vis[pos + 1].i }); }
+      else if (k === "k" || k === "ArrowUp") { stop(); if (vis[pos - 1]) this.set({ sel: vis[pos - 1].i }); }
+      else if (k === "Enter") { stop(); this.connect(st.sel); }
+      else if (k === "/") { stop(); this.set({ filter: "" }); }
+      else if (k === "a") { stop(); this.set({ popup: "form", form: { edit: null, field: 0, values: ["", "matt", ""] } }); }
+      else if (k === "e") { stop(); const h = st.hosts[st.sel]; this.set({ popup: "form", form: { edit: st.sel, field: 0, values: [h.name, h.user, h.addr] } }); }
+      else if (k === "h") { stop(); this.set({ screen: "health" }); }
+      else if (k === "?") { stop(); this.set({ popup: "help" }); }
+      else if (k === "q") { stop(); this.set({ screen: "quit", popup: null }); }
+      return;
+    }
+
+    if (st.screen === "health") {
+      const n = st.hosts.length;
+      if (k === "ArrowRight" || k === "l" || k === "j" || k === "ArrowDown") { stop(); this.set({ sel: (st.sel + 1) % n }); }
+      else if (k === "ArrowLeft" || k === "h" || k === "k" || k === "ArrowUp") { stop(); this.set({ sel: (st.sel - 1 + n) % n }); }
+      else if (k === "Enter") { stop(); this.connect(st.sel); }
+      else if (k === "r") { stop(); const hh = st.hosts[st.sel]; if (hh && hh.state !== "up") this.reconnect(hh.name); }
+      else if (k === "Escape") { stop(); this.set({ screen: st.active !== null ? "session" : "hosts" }); }
+      else if (k === "?") { stop(); this.set({ popup: "help" }); }
+      else if (k === "q") { stop(); this.set({ screen: "quit", popup: null }); }
+      return;
+    }
+
+    if (st.screen === "session") {
+      const s = st.sessions[st.active];
+      const h = s && st.hosts.find(x => x.name === s.host);
+      if (!s) { this.set({ screen: "hosts" }); return; }
+      if (h && h.state !== "up") { if (k === "r") { stop(); this.reconnect(h.name); } return; }
+      if (k === "Enter") { stop(); this.run(st.typed); }
+      else if (k === "Backspace") { stop(); this.set({ typed: st.typed.slice(0, -1) }); }
+      else if (k === "Escape") { stop(); this.set({ typed: "" }); }
+      else if (k === "l" && e.ctrlKey) { stop(); this.patchSession({ lines: [] }); }
+      else if (k === "c" && e.ctrlKey) { stop(); this.patchSession({ lines: [...s.lines, ["^C", "#5b6b7a"]], cmd: "bash" }); }
+      else if (k.length === 1 && !e.ctrlKey) { stop(); this.set({ typed: st.typed + k }); }
+    }
+  }
+
+  renderVals() {
+    const st = this.state;
+    const pad = n => String(n).padStart(2, "0");
+    const d = new Date();
+    const active = st.active !== null ? st.sessions[st.active] : null;
+    const aHost = active ? st.hosts.find(h => h.name === active.host) : null;
+    const m = aHost ? this.metrics(aHost.name) : null;
+    const hostColor = { up: "#35d07f", unreachable: "#ef5f52", offline: "#3f4b52" };
+    const vis = this.visibleHosts();
+
+    const hostRows = vis.map(h => {
+      const seld = h.i === st.sel;
+      const n = this.windowsOn(h.name);
+      const isUp = h.state === "up";
+      const live = st.sessions.find(s => s.host === h.name);
+      return {
+        ...h, up: isUp, down: !isUp, downText: h.down || "",
+        dot: h.state === "offline" ? "○" : "●", dotColor: hostColor[h.state],
+        bg: seld ? "#10171b" : "transparent", marker: seld ? "inset 2px 0 0 #4fd1c5" : "none",
+        nameColor: h.state === "offline" ? "#8b9aa6" : seld ? "#fff" : "#cbd5dd", nameWeight: seld ? 700 : 400,
+        addrColor: seld ? "#8b9aa6" : "#5b6b7a",
+        tmux: n ? String(n) : "·", tmuxColor: n ? (isUp ? "#4fd1c5" : "#ef5f52") : "#3f4b52",
+        spark: isUp ? this.spark("rtt-" + h.name, h.rtt + (this.metrics(h.name).cpu % 5), 10, 50) : "",
+        last: h.state === "unreachable" && n ? "tmux still running · ⏎ reconnect" : live ? (live.cmd + " · " + live.age) : h.last,
+        lastColor: h.state === "offline" ? "#3f4b52" : live || (h.state === "unreachable" && n) ? "#8b9aa6" : "#5b6b7a",
+        select: () => this.set({ sel: h.i }), connect: () => this.connect(h.i)
+      };
+    });
+
+    const chips = st.sessions.map((s, i) => {
+      const h = st.hosts.find(x => x.name === s.host);
+      const on = st.screen === "session" && st.active === i;
+      return { n: i + 1, host: s.host, dotColor: hostColor[h ? h.state : "offline"], bg: on ? "#10171b" : "transparent", color: on ? "#fff" : "#8b9aa6", border: on ? "2px solid #4fd1c5" : "2px solid transparent", go: () => this.set({ active: i, screen: "session", popup: null }) };
+    });
+
+    const switchRows = st.sessions.map((s, i) => {
+      const h = st.hosts.find(x => x.name === s.host);
+      const here = st.active === i && st.screen === "session";
+      const selr = st.swSel === i;
+      const dead = h && h.state !== "up";
+      return { n: i + 1, host: s.host, weight: selr ? 700 : 400, hostColor: selr ? "#fff" : "#cbd5dd", cmd: dead ? "unreachable · tmux alive" : s.cmd, cmdColor: dead ? "#ef5f52" : "#8b9aa6", status: here ? "here" : s.age, statusColor: here ? "#35d07f" : "#5b6b7a", bg: selr ? "#10171b" : "transparent", marker: selr ? "inset 2px 0 0 #4fd1c5" : "none", go: () => this.set({ active: i, screen: "session", popup: null }) };
+    });
+
+    // single-host health
+    const dh = st.screen === "health" ? st.hosts[st.sel] : (aHost || st.hosts[st.sel]); const dm = dh ? this.metrics(dh.name) : null;
+    const hUp = !!dh && dh.state === "up" && (st.screen === "health" || st.screen === "session");
+    const stripMode = Number(st.strip) || 0;
+    const sd = dh ? this.seed(dh.name) : 0;
+    const live = dh ? st.sessions.find(s => s.host === dh.name) : null;
+    const hProcs = dm ? [
+      { pid: 1555, cmd: dh.name.startsWith("db") ? "postgres: writer" : dh.name.startsWith("build") ? "rustc" : "nginx: master", cpu: (dm.cpu * .6).toFixed(1), rss: dh.name.startsWith("build") ? "2.1 GB" : "84 MB" },
+      { pid: 27, cmd: live ? live.cmd : "sshd: matt", cpu: (dm.cpu * .25).toFixed(1), rss: "6.9 MB" },
+      { pid: 21, cmd: "sshd: matt [priv]", cpu: "0.1", rss: "10.4 MB" },
+      { pid: 1, cmd: "systemd", cpu: "0.0", rss: "12.0 MB" }
+    ] : [];
+
+    const f = st.form;
+    const formRows = f ? ["name", "user", "address"].map((label, i) => ({ label, value: f.values[i], active: f.field === i, border: f.field === i ? "#4fd1c5" : "#1c2429" })) : [];
+
+    const rxk = m ? m.rxk : 0, txk = m ? m.txk : 0;
+    const confirmSess = st.confirm !== null && st.confirm !== undefined ? st.sessions[st.confirm] : null;
+    const liveHosts = new Set(st.sessions.map(s => s.host)).size;
+
+    return {
+      isHosts: st.screen === "hosts", isSession: st.screen === "session", isHealth: st.screen === "health", isQuit: st.screen === "quit", notQuit: st.screen !== "quit",
+      popSwitch: st.popup === "switch", popHelp: st.popup === "help", popForm: st.popup === "form", popConfirm: st.popup === "confirm",
+      prefixArmed: st.prefix, hasToast: !!st.toast, toast: st.toast,
+      hostCount: st.hosts.length, sessionCount: st.sessions.length, liveHostCount: liveHosts,
+      filtering: st.filter !== null, notFiltering: st.filter === null, filterText: st.filter || "", filterHint: "/ filter",
+      hostRows, noMatches: vis.length === 0, chips, switchRows, noSessions: st.sessions.length === 0,
+      hostsChipBg: st.screen === "hosts" ? "#4fd1c5" : "transparent", hostsChipColor: st.screen === "hosts" ? "#080b0d" : "#5b6b7a",
+      healthChipBg: st.screen === "health" ? "#4fd1c5" : "transparent", healthChipColor: st.screen === "health" ? "#080b0d" : "#5b6b7a",
+      sessionCols: stripMode === 1 ? "1fr 300px" : stripMode === 2 ? "1fr 1fr" : "1fr", stripOn: stripMode === 1, stripHalf: stripMode === 2,
+      scrollback: active ? active.lines.map(l => ({ text: l[0], color: l[1] })) : [],
+      promptLive: !!aHost && aHost.state === "up", promptDead: !!aHost && aHost.state !== "up",
+      promptUser: aHost ? "matt@" + aHost.name : "", typed: st.typed, activeHostName: aHost ? aHost.name : "",
+      hasActive: !!aHost && aHost.state === "up",
+      rx: this.fmtRate(rxk), tx: this.fmtRate(txk), rxShort: this.fmtShort(rxk), txShort: this.fmtShort(txk),
+      rxSpark: aHost ? this.spark("rx-" + aHost.name, rxk, 27) : "", txSpark: aHost ? this.spark("tx-" + aHost.name, txk, 27) : "",
+      cpu: m ? m.cpu : 0, mem: m ? m.mem : 0, disk: m ? m.disk : 0, cpuW: (m ? m.cpu : 0) + "%", memW: (m ? m.mem : 0) + "%", diskW: (m ? m.disk : 0) + "%",
+      rttNow: aHost ? aHost.rtt : 0, rttSpark: aHost ? this.spark("rtt-" + aHost.name, aHost.rtt + (m.cpu % 5), 14, 50) : "",
+      peers: aHost ? this.peersFor(rxk, txk) : [], clock: pad(d.getHours()) + ":" + pad(d.getMinutes()),
+      // health page
+      hName: dh ? dh.name : "", hUser: dh ? dh.user : "", hAddr: dh ? dh.addr : "", hDot: dh && dh.state === "offline" ? "○" : "●", hDotColor: dh ? hostColor[dh.state] : "#3f4b52",
+      hStateText: dh ? (dh.state === "up" ? "reachable" : dh.state) : "", hSessions: dh ? this.windowsOn(dh.name) : 0, hHasSessions: dh ? this.windowsOn(dh.name) > 0 : false,
+      hUp, hDown: !!dh && dh.state !== "up", hDownText: dh ? (dh.down || "") : "",
+      hRx: dm ? this.fmtRate(dm.rxk) : "", hTx: dm ? this.fmtRate(dm.txk) : "",
+      hRxSpark: hUp ? this.spark("rx-" + dh.name, dm.rxk, 44) : "", hTxSpark: hUp ? this.spark("tx-" + dh.name, dm.txk, 44) : "",
+      hRxSparkHalf: hUp ? this.spark("rx-" + dh.name, dm.rxk, 26) : "", hTxSparkHalf: hUp ? this.spark("tx-" + dh.name, dm.txk, 26) : "",
+      hCpu: dm ? dm.cpu : 0, hCpuW: (dm ? dm.cpu : 0) + "%", hCpuSpark: hUp ? this.spark("cpu-" + dh.name, dm.cpu, 24, 100) : "",
+      hLoad: dm ? [dm.cpu / 25, dm.cpu / 28, dm.cpu / 30].map(x => x.toFixed(2)).join("  ") : "", hUptime: dh ? (12 + (sd % 40)) + " days" : "",
+      hMem: dm ? dm.mem : 0, hMemW: (dm ? dm.mem : 0) + "%", hMemText: dm ? Math.round(dm.mem * .62) + " GiB of 62 GiB · 21 GiB cache" : "",
+      hRtt: dh ? dh.rtt : 0, hRttSpark: hUp ? this.spark("rtt-" + dh.name, dh.rtt + (dm.cpu % 5), 16, 50) : "",
+      hDisk: dm ? dm.disk : 0, hDiskW: (dm ? dm.disk : 0) + "%", hDisk2: sd % 70, hDisk2W: (sd % 70) + "%", hDisk3: 5 + (sd % 20), hDisk3W: (5 + (sd % 20)) + "%",
+      hPeers: dm ? this.peersFor(dm.rxk, dm.txk) : [], hProcs,
+      formTitle: f && f.edit !== null ? "edit host" : "add host", formRows, formHint: f && f.edit !== null ? "changes apply to new connections" : "essh will try the host on save",
+      confirmText: confirmSess ? "Kill session " + (st.confirm + 1) + " on " + confirmSess.host + "?" : "", confirmSub: confirmSess ? confirmSess.cmd + " will be terminated. Detach (^A d) instead to keep it running." : "",
+      focus: (e) => e.currentTarget.focus(),
+      goHosts: () => this.set({ screen: "hosts", popup: null }),
+      goHealth: () => this.set({ screen: "health", popup: null, sel: st.screen === "session" ? this.hostIndexOfActive() : st.sel }),
+      closeAndHosts: () => this.set({ popup: null, screen: "hosts" })
+    };
+  }
+}
+</script>
+</body>
+</html>

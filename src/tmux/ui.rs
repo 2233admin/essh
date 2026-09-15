@@ -74,24 +74,33 @@ fn line(f: &mut Frame, area: Rect, text: impl Into<Line<'static>>, color: Color)
         area,
     );
 }
-fn main_layout(area: Rect) -> Vec<Rect> {
-    Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Min(1),
-        Constraint::Length(2),
-    ])
-    .margin(1)
-    .split(area)
-    .to_vec()
+#[derive(Clone, Copy)]
+enum GraphScale {
+    Traffic,
+    Percent,
+    Latency,
+}
+fn graph_history(values: &[u64], width: usize, scale: GraphScale) -> String {
+    let ceiling = match scale {
+        GraphScale::Traffic => values.iter().copied().max().unwrap_or(1).max(1) as f64 * 1.6,
+        GraphScale::Percent => 100.0,
+        GraphScale::Latency => 50.0,
+    };
+    let glyphs = ['⣀', '⣄', '⣤', '⣶', '⣿'];
+    let mut out = "⣀".repeat(width.saturating_sub(values.len()));
+    for v in values.iter().skip(values.len().saturating_sub(width)) {
+        out.push(glyphs[((*v as f64 / ceiling * 4.0).floor() as usize).min(4)]);
+    }
+    out
 }
 fn spark(values: &[u64], width: usize) -> String {
-    let max = values.iter().copied().max().unwrap_or(1).max(1);
-    let glyphs = ['⣀', '⣄', '⣠', '⣤', '⣶', '⣿'];
-    values
-        .iter()
-        .skip(values.len().saturating_sub(width))
-        .map(|v| glyphs[((*v as f64 / max as f64) * 5.0) as usize])
-        .collect()
+    graph_history(values, width, GraphScale::Traffic)
+}
+pub fn cached_history(name: &str) -> Vec<u64> {
+    fs::read(probe_path(name).with_extension("history"))
+        .ok()
+        .and_then(|raw| serde_json::from_slice(&raw).ok())
+        .unwrap_or_default()
 }
 
 pub fn tcp_latency(host: &Host) -> Option<f64> {
@@ -107,7 +116,7 @@ pub fn tcp_latency(host: &Host) -> Option<f64> {
     }
     None
 }
-fn probe_path(name: &str) -> PathBuf {
+pub(super) fn probe_path(name: &str) -> PathBuf {
     use sha2::{Digest, Sha256};
     root().join(format!(
         "probe-{}",
@@ -135,107 +144,182 @@ pub fn hosts(config: AppConfig, new: bool) -> Result<()> {
     workspace::run(config, navigation::View::Hosts, new, new)
 }
 
-fn host_form(config: &mut AppConfig, original: Option<&Host>) -> Result<()> {
+fn host_form(config: &mut AppConfig, original: Option<&Host>) -> Result<Option<String>> {
     let mut screen = Screen::new()?;
     let mut field = 0;
-    let mut values = if let Some(h) = original {
-        vec![
-            h.name.clone(),
-            if h.via_ssh_config {
-                h.name.clone()
-            } else {
-                h.hostname.clone()
-            },
-            h.user.clone().unwrap_or_default(),
-            h.port.to_string(),
-        ]
-    } else {
-        vec![String::new(), String::new(), String::new(), "22".into()]
-    };
-    let labels = ["Alias", "Hostname", "User (optional)", "Port"];
+    let mut values = original
+        .map(|h| {
+            vec![
+                h.name.clone(),
+                h.user.clone().unwrap_or_default(),
+                h.hostname.clone(),
+                h.port.to_string(),
+            ]
+        })
+        .unwrap_or_else(|| vec![String::new(), String::new(), String::new(), "22".into()]);
     let mut error = String::new();
+    let labels = ["Name", "User (empty = root)", "Address", "Port"];
+    let mut fields = Vec::new();
     loop {
         screen.term.draw(|f| {
             background(f);
-            let r = main_layout(f.area());
-            line(f, r[0], "host · saved in essh configuration", CYAN);
-            let rows = Layout::vertical([Constraint::Length(2); 4]).split(r[1]);
+            let area = f.area();
+            let width = area.width.min(62);
+            let height = area.height.min(19);
+            let popup = Rect::new(
+                area.x + (area.width - width) / 2,
+                area.y + (area.height - height) / 2,
+                width,
+                height,
+            );
+            let title = if original.is_some() {
+                " Edit host "
+            } else {
+                " Add host "
+            };
+            let block = Block::bordered()
+                .title(title)
+                .border_style(Style::default().fg(CYAN));
+            let inner = block.inner(popup);
+            f.render_widget(block, popup);
+            let rows = Layout::vertical([
+                Constraint::Length(3),
+                Constraint::Length(3),
+                Constraint::Length(3),
+                Constraint::Length(3),
+                Constraint::Min(1),
+                Constraint::Length(2),
+            ])
+            .split(inner);
+            fields.clear();
             for i in 0..4 {
-                line(
-                    f,
+                fields.push(rows[i]);
+                let block = Block::bordered()
+                    .title(labels[i])
+                    .border_style(Style::default().fg(if i == field { CYAN } else { DIM }));
+                let inside = block.inner(rows[i]);
+                let limit = usize::from(inside.width.saturating_sub(1));
+                let chars: Vec<_> = values[i].chars().collect();
+                let visible: String = chars
+                    .iter()
+                    .skip(chars.len().saturating_sub(limit))
+                    .collect();
+                f.render_widget(
+                    Paragraph::new(visible.clone())
+                        .block(block)
+                        .style(Style::default().fg(TEXT)),
                     rows[i],
-                    format!(
-                        "{} {}: {}",
-                        if i == field { "▌" } else { " " },
-                        labels[i],
-                        values[i]
-                    ),
-                    if i == field { CYAN } else { TEXT },
                 );
+                if i == field && inside.width > 0 && inside.height > 0 {
+                    f.set_cursor_position(Position::new(
+                        inside.x + visible.chars().count().min(limit) as u16,
+                        inside.y,
+                    ));
+                }
             }
             line(
                 f,
-                r[2],
-                if error.is_empty() {
-                    "Tab next · Enter save · Esc cancel".into()
-                } else {
+                rows[4],
+                if !error.is_empty() {
                     error.clone()
+                } else if original.is_some() {
+                    "Changes apply to new connections".into()
+                } else {
+                    "Host reachability is checked after saving".into()
                 },
                 DIM,
             );
+            line(
+                f,
+                rows[5],
+                "Tab/click field · Enter save · Esc/F4 cancel · F1 help",
+                DIM,
+            );
         })?;
-        match key()? {
-            Some(KeyCode::Esc) => return Ok(()),
-            Some(KeyCode::Tab | KeyCode::Down) => field = (field + 1) % 4,
-            Some(KeyCode::BackTab | KeyCode::Up) => field = (field + 3) % 4,
-            Some(KeyCode::Backspace) => {
+        if !event::poll(Duration::from_millis(150))? {
+            continue;
+        }
+        let code = match event::read()? {
+            Event::Key(k) if k.kind != KeyEventKind::Release => k.code,
+            Event::Mouse(m) if m.kind == event::MouseEventKind::Down(event::MouseButton::Left) => {
+                if let Some(i) = fields
+                    .iter()
+                    .position(|r| r.contains(Position::new(m.column, m.row)))
+                {
+                    field = i;
+                }
+                continue;
+            }
+            _ => continue,
+        };
+        match code {
+            KeyCode::Esc | KeyCode::F(4) => return Ok(None),
+            KeyCode::F(1) => {
+                error = "Tab/Shift+Tab fields; type to edit; Enter saves; Esc cancels".into()
+            }
+            KeyCode::Tab | KeyCode::Down => field = (field + 1) % 4,
+            KeyCode::BackTab | KeyCode::Up => field = (field + 3) % 4,
+            KeyCode::Backspace => {
                 values[field].pop();
             }
-            Some(KeyCode::Char(c)) => values[field].push(c),
-            Some(KeyCode::Enter) => {
+            KeyCode::Char(c) => values[field].push(c),
+            KeyCode::Enter => {
+                if values[0].trim().is_empty() || values[2].trim().is_empty() {
+                    error = "Name and address are required".into();
+                    continue;
+                }
+                if [&values[0], &values[2]]
+                    .iter()
+                    .any(|v| v.starts_with('-') || v.chars().any(char::is_whitespace))
+                {
+                    error = "Name/address cannot start with '-' or contain spaces".into();
+                    continue;
+                }
+                if config
+                    .hosts
+                    .iter()
+                    .any(|h| h.name == values[0] && original.is_none_or(|o| o.name != h.name))
+                {
+                    error = "A host with this name already exists".into();
+                    continue;
+                }
                 let port = match values[3].parse::<u16>() {
-                    Ok(n) if n > 0 => n,
+                    Ok(p) if p > 0 => p,
                     _ => {
                         error = "Port must be 1–65535".into();
                         continue;
                     }
                 };
-                if values[0].is_empty()
-                    || values[1].is_empty()
-                    || values[..2]
-                        .iter()
-                        .any(|v| v.starts_with('-') || v.chars().any(char::is_whitespace))
-                {
-                    error =
-                        "Alias and hostname must be nonempty without spaces or leading '-'".into();
-                    continue;
-                }
-                let mut entry = config
-                    .hosts
-                    .iter()
-                    .find(|h| h.name == values[0])
-                    .cloned()
-                    .unwrap_or(crate::config::HostEntry {
-                        name: values[0].clone(),
-                        hostname: values[1].clone(),
-                        port,
-                        user: None,
-                        key: None,
-                        tags: HashMap::new(),
-                        jump_host: None,
-                        port_forwards: Vec::new(),
-                    });
-                entry.hostname = values[1].clone();
+                let position =
+                    original.and_then(|h| config.hosts.iter().position(|v| v.name == h.name));
+                let mut entry =
+                    position
+                        .map(|i| config.hosts[i].clone())
+                        .unwrap_or(crate::config::HostEntry {
+                            name: values[0].clone(),
+                            hostname: values[2].clone(),
+                            port,
+                            user: None,
+                            key: None,
+                            tags: HashMap::new(),
+                            jump_host: None,
+                            port_forwards: Vec::new(),
+                        });
+                entry.name = values[0].clone();
+                entry.hostname = values[2].clone();
                 entry.port = port;
-                entry.user = if values[2].is_empty() {
-                    None
+                entry.user = Some(if values[1].is_empty() {
+                    "root".into()
                 } else {
-                    Some(values[2].clone())
-                };
-                config.hosts.retain(|h| h.name != entry.name);
-                config.hosts.push(entry);
+                    values[1].clone()
+                });
+                if let Some(i) = position {
+                    config.hosts[i] = entry;
+                } else {
+                    config.hosts.push(entry);
+                }
                 config.save()?;
-                return Ok(());
+                return Ok(Some(values[0].clone()));
             }
             _ => (),
         }
@@ -253,7 +337,8 @@ pub fn strip(id: &str) -> Result<()> {
     let s = saved(id)?;
     let mut screen = Screen::new()?;
     loop {
-        let m = metrics::read(id).filter(|m| m.fresh());
+        let sample = metrics::read(id);
+        let m = sample.as_ref().filter(|m| m.fresh());
         screen.term.draw(|f| {
             background(f);
             if f.area().width < 26 {
@@ -313,7 +398,8 @@ pub fn strip(id: &str) -> Result<()> {
                     f,
                     r[6],
                     format!(
-                        "rtt {}",
+                        "rtt {} {}",
+                        graph_history(&m.rtt_history, 14, GraphScale::Latency),
                         m.rtt
                             .map(|r| format!("{r:.0}ms"))
                             .unwrap_or_else(|| "—".into())
@@ -354,11 +440,56 @@ pub fn strip(id: &str) -> Result<()> {
                     );
                 }
             } else {
-                line(f, r[1], "Metrics unavailable", DIM);
+                line(
+                    f,
+                    r[1],
+                    if sample.is_some() {
+                        "Last reading · not live"
+                    } else {
+                        "Metrics unavailable"
+                    },
+                    DIM,
+                );
             }
-            line(f, r[8], "^A m hide · F2 Health", DIM);
+            line(f, r[8], "^A m half · ^A h / F2 full", DIM);
         })?;
         let _ = key()?;
+    }
+}
+
+pub(super) fn reconnect_key() -> Result<bool> {
+    enable_raw_mode()?;
+    let _guard = scopeguard::guard((), |_| {
+        let _ = disable_raw_mode();
+    });
+    loop {
+        match key()? {
+            Some(KeyCode::Enter | KeyCode::Char('r')) => return Ok(true),
+            Some(KeyCode::Char('q')) => return Ok(false),
+            _ => (),
+        }
+    }
+}
+
+pub(super) fn confirm_kill(w: &Window) -> Result<bool> {
+    let mut screen = Screen::new()?;
+    let command = metrics::read(&w.id)
+        .filter(|m| m.fresh())
+        .and_then(|m| m.running)
+        .unwrap_or_else(|| "Remote programs".into());
+    loop {
+        screen.term.draw(|f| {
+            background(f);let a=f.area();let width=a.width.min(64);let height=a.height.min(9);
+            let r=Rect::new(a.x+(a.width-width)/2,a.y+(a.height-height)/2,width,height);
+            let block=Block::bordered().title(format!(" Kill session {} on {}? ",w.index,w.host)).border_style(Style::default().fg(RED));
+            let text=format!("{command} will be terminated.\nReturn to Hosts (F4) to keep it running.\n\ny Yes, kill · n / Esc Cancel");
+            f.render_widget(Paragraph::new(text).block(block).wrap(Wrap{trim:false}).style(Style::default().fg(TEXT)),r);
+        })?;
+        match key()? {
+            Some(KeyCode::Char('y')) => return Ok(true),
+            Some(KeyCode::Esc | KeyCode::Char('n') | KeyCode::F(4)) => return Ok(false),
+            _ => (),
+        }
     }
 }
 
@@ -366,12 +497,10 @@ pub fn strip(id: &str) -> Result<()> {
 mod tests {
     use super::*;
     #[test]
-    fn small_terminal_layouts_remain_in_bounds() {
-        for (w, h) in [(40, 12), (80, 24), (120, 40)] {
-            let area = Rect::new(0, 0, w, h);
-            for r in main_layout(area) {
-                assert!(r.right() <= w && r.bottom() <= h);
-            }
-        }
+    fn graphs_use_fixed_scales_and_left_padding() {
+        assert_eq!(graph_history(&[4, 8, 4], 5, GraphScale::Latency), "⣀⣀⣀⣀⣀");
+        assert_eq!(graph_history(&[0, 50, 100], 3, GraphScale::Percent), "⣀⣤⣿");
+        assert_eq!(graph_history(&[10, 10], 4, GraphScale::Traffic), "⣀⣀⣤⣤");
+        assert_eq!(graph_history(&[500], 1, GraphScale::Latency), "⣿");
     }
 }

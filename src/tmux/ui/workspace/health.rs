@@ -15,6 +15,15 @@ fn size(kb: Option<u64>) -> String {
     kb.map(|n| format!("{:.1} GiB", n as f64 / 1048576.0))
         .unwrap_or_else(|| "—".into())
 }
+fn rss(kb: u64) -> String {
+    if kb >= 1048576 {
+        format!("{:.1} GiB", kb as f64 / 1048576.0)
+    } else if kb >= 1024 {
+        format!("{:.1} MiB", kb as f64 / 1024.0)
+    } else {
+        format!("{kb} KiB")
+    }
+}
 fn percent(n: Option<f64>) -> String {
     n.filter(|v| v.is_finite())
         .map(|v| format!("{v:.1}%"))
@@ -63,12 +72,28 @@ fn panel_lines(i: usize, m: &metrics::Snapshot, s: &State, width: u16) -> Vec<Li
     match i {
         0 => {
             lines.push(value(percent(m.cpu), GREEN));
-            lines.push(graph(&d.cpu_history, width, GREEN));
+            lines.push(meter(m.cpu, width));
+            lines.push(text(
+                graph_history(
+                    &d.cpu_history,
+                    usize::from(width.min(24)),
+                    GraphScale::Percent,
+                ),
+                GREEN,
+            ));
             lines.push(text(
                 format!("Load 1 / 5 / 15m: {}", d.load.as_deref().unwrap_or("—")),
                 TEXT,
             ));
-            lines.push(Line::default());
+            lines.push(text(
+                format!(
+                    "Up {}",
+                    d.uptime
+                        .map(|n| format!("{:.1} days", n / 86400.0))
+                        .unwrap_or_else(|| "—".into())
+                ),
+                TEXT,
+            ));
             if d.cores.is_empty() {
                 lines.push(text("Per-core usage unavailable", DIM));
             } else {
@@ -99,7 +124,14 @@ fn panel_lines(i: usize, m: &metrics::Snapshot, s: &State, width: u16) -> Vec<Li
                 GREEN,
             ));
             lines.push(meter(m.mem, width));
-            lines.push(text(format!("Available {}", size(d.mem_available)), TEXT));
+            lines.push(text(
+                format!(
+                    "Cache {} · available {}",
+                    size(d.mem_cached),
+                    size(d.mem_available)
+                ),
+                TEXT,
+            ));
             lines.push(text(
                 format!(
                     "Swap {} / {}",
@@ -112,7 +144,33 @@ fn panel_lines(i: usize, m: &metrics::Snapshot, s: &State, width: u16) -> Vec<Li
                 ),
                 TEXT,
             ));
-            lines.push(graph(&d.mem_history, width, GREEN));
+            lines.push(meter(
+                d.swap_total.zip(d.swap_free).map(|(t, f)| {
+                    if t == 0 {
+                        0.0
+                    } else {
+                        t.saturating_sub(f) as f64 / t as f64 * 100.0
+                    }
+                }),
+                width,
+            ));
+            lines.push(text(
+                format!(
+                    "RTT {}",
+                    m.rtt
+                        .map(|v| format!("{v:.0}ms"))
+                        .unwrap_or_else(|| "—".into())
+                ),
+                MID,
+            ));
+            lines.push(text(
+                graph_history(
+                    &m.rtt_history,
+                    usize::from(width.min(16)),
+                    GraphScale::Latency,
+                ),
+                GREEN,
+            ));
         }
         2 => {
             let (name, rx, tx) = interface(m, s.interface);
@@ -129,9 +187,17 @@ fn panel_lines(i: usize, m: &metrics::Snapshot, s: &State, width: u16) -> Vec<Li
                 history.map(|h| h.1.as_slice()).unwrap_or(&[])
             };
             lines.push(value(format!("↓ RX  {}", rate(rx)), GREEN));
-            lines.push(graph(rx_history, width, GREEN));
+            lines.push(graph(
+                rx_history,
+                width.min(if s.half { 26 } else { 44 }),
+                GREEN,
+            ));
             lines.push(value(format!("↑ TX  {}", rate(tx)), CYAN));
-            lines.push(graph(tx_history, width, CYAN));
+            lines.push(graph(
+                tx_history,
+                width.min(if s.half { 26 } else { 44 }),
+                CYAN,
+            ));
             lines.push(text(
                 format!(
                     "TCP latency {} · i Interface",
@@ -173,15 +239,18 @@ fn panel_lines(i: usize, m: &metrics::Snapshot, s: &State, width: u16) -> Vec<Li
                     b.cpu_pct.total_cmp(&a.cpu_pct)
                 }
             });
-            lines.push(text("PID       CPU%   MEM%  COMMAND", MID));
+            lines.push(text("PID     COMMAND           CPU%       RSS", MID));
             if processes.is_empty() {
                 lines.push(text("Process data unavailable", DIM));
             }
             for p in processes {
                 lines.push(text(
                     format!(
-                        "{:<8} {:>5.1}  {:>5.1}  {}",
-                        p.pid, p.cpu_pct, p.mem_pct, p.name
+                        "{:<7} {:<16} {:>5.1}  {:>8}",
+                        p.pid,
+                        p.name.chars().take(16).collect::<String>(),
+                        p.cpu_pct,
+                        rss(p.mem_rss_kb)
                     ),
                     TEXT,
                 ));
@@ -265,19 +334,32 @@ pub(super) fn draw_health(
         r.height.saturating_sub(header.height),
     );
     let mut panels = Vec::new();
-    if body.width >= 120 && body.height >= 27 {
-        let cols = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .spacing(2)
-            .split(body);
-        for col in cols.iter() {
-            panels.extend(
-                Layout::vertical([Constraint::Ratio(1, 3); 3])
-                    .spacing(1)
-                    .split(*col)
-                    .iter()
-                    .copied(),
-            );
+    if body.width >= if s.half { 60 } else { 100 } && body.height >= if s.half { 32 } else { 26 } {
+        let rows = Layout::vertical([
+            Constraint::Length(5),
+            Constraint::Length(if s.half { 18 } else { 12 }),
+            Constraint::Length(7),
+        ])
+        .spacing(1)
+        .flex(ratatui::layout::Flex::Start)
+        .split(body);
+        panels.push((2, rows[0]));
+        if s.half {
+            let middle = Layout::horizontal([Constraint::Ratio(1, 2); 2])
+                .spacing(2)
+                .split(rows[1]);
+            let left = Layout::vertical([Constraint::Ratio(1, 2); 2]).split(middle[0]);
+            panels.extend([(0, left[0]), (1, left[1]), (3, middle[1])]);
+        } else {
+            let middle = Layout::horizontal([Constraint::Ratio(1, 3); 3])
+                .spacing(2)
+                .split(rows[1]);
+            panels.extend([(0, middle[0]), (1, middle[1]), (3, middle[2])]);
         }
+        let bottom = Layout::horizontal([Constraint::Ratio(1, 2); 2])
+            .spacing(2)
+            .split(rows[2]);
+        panels.extend([(5, bottom[0]), (4, bottom[1])]);
     } else {
         let mut x = body.x;
         for (i, name) in PANELS.iter().enumerate() {
@@ -293,15 +375,18 @@ pub(super) fn draw_health(
             x += width;
         }
         let tabs_height = 1.min(body.height);
-        panels.push(Rect::new(
-            body.x,
-            body.y + tabs_height,
-            body.width,
-            body.height.saturating_sub(tabs_height),
+        panels.push((
+            s.focus,
+            Rect::new(
+                body.x,
+                body.y + tabs_height,
+                body.width,
+                body.height.saturating_sub(tabs_height),
+            ),
         ));
     }
-    for (j, rect) in panels.iter().enumerate() {
-        let i = if panels.len() == 1 { s.focus } else { j };
+    for (i, rect) in &panels {
+        let i = *i;
         s.hits.push((*rect, Click::Panel(i)));
         let title = match i {
             2 => format!("Network · {}", interface(m, s.interface).0),
@@ -311,7 +396,8 @@ pub(super) fn draw_health(
             ),
             _ => PANELS[i].into(),
         };
-        let block = Block::bordered()
+        let block = Block::default()
+            .borders(Borders::TOP)
             .title(Span::styled(
                 format!(" {title} "),
                 Style::default().fg(CYAN).bold(),
@@ -332,6 +418,16 @@ pub(super) fn draw_health(
             inner.height.saturating_sub(hint_height),
         );
         let lines = panel_lines(i, m, s, content.width);
+        if i == 2 && content.width >= 60 {
+            let cols = Layout::horizontal([Constraint::Ratio(1, 2); 2])
+                .spacing(3)
+                .split(content);
+            for (col, start) in cols.iter().zip([0, 2]) {
+                let rows = panel_lines(i, m, s, col.width);
+                f.render_widget(Paragraph::new(rows[start..start + 2].to_vec()), *col);
+            }
+            continue;
+        }
         // Keep tabular rows aligned; clamp scrolling when data or terminal size changes.
         let count = lines.len().min(u16::MAX as usize) as u16;
         let paragraph = Paragraph::new(lines);
@@ -440,9 +536,11 @@ mod tests {
             })
             .collect();
         assert_eq!(panels.len(), 6);
-        assert_eq!(panels[0].1.y, panels[3].1.y);
-        assert!(panels[0].1.right() < panels[3].1.x);
-        assert!(panels[0].1.bottom() < panels[1].1.y);
+        let rect = |id| panels.iter().find(|(i, _)| *i == id).unwrap().1;
+        assert!(rect(2).bottom() <= rect(0).y);
+        assert_eq!(rect(0).y, rect(1).y);
+        assert_eq!(rect(1).y, rect(3).y);
+        assert_eq!(rect(5).y, rect(4).y);
 
         // Optional artifact for visually reviewing the real ratatui renderer.
         if let Ok(path) = std::env::var("ESSH_HEALTH_RENDER") {

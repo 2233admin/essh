@@ -70,6 +70,10 @@ name="fixture"
 hostname="127.0.0.1"
 port={port}
 user="{pwd.getpwuid(os.getuid()).pw_name}"
+[[hosts]]
+name="offline"
+hostname="127.0.0.1"
+port=1
 """)
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 32, 120, 0, 0))
@@ -127,13 +131,27 @@ user="{pwd.getpwuid(os.getuid()).pw_name}"
                 wait_for(lambda: "fixture" in view("essh:0"), "host list")
                 assert tmux("show-options", "-gv", "prefix") == "C-a"
                 wait_for(lambda: "USER@ADDRESS" in view("essh:0"), "wide host layout")
-                os.write(master, b"\x1bOQ")
+                os.write(master, b"h")
                 wait_for(lambda: "Connect to a host" in transcript.decode(errors="replace"), "health without a session")
                 os.write(master, b"\x1b")
                 drain(.3)
                 os.write(master, b"\x1b[15~")
                 drain(.3)
                 assert tmux("display-message", "-p", "#{window_index}") == "0"
+                os.write(master,b"/no-such-host")
+                wait_for(lambda: 'no hosts match "no-such-host"' in view("essh:0"), "empty filter feedback")
+                os.write(master,b"\x1b")
+                wait_for(lambda: "no hosts match" not in view("essh:0"), "Escape clears filter")
+                os.write(master,b"a")
+                wait_for(lambda: "Add host" in view("essh:0"), "add host form")
+                os.write(master,b"extra\t" + pwd.getpwuid(os.getuid()).pw_name.encode() + b"\t127.0.0.1\t\x7f\x7f" + str(port).encode() + b"\r")
+                wait_for(lambda: "extra" in view("essh:0") and "Main menu" in view("essh:0"), "save new host")
+                saved_config=(root / ".essh/config.toml").read_text()
+                assert saved_config.index('name = "fixture"') < saved_config.index('name = "offline"') < saved_config.index('name = "extra"')
+                os.write(master,b"e")
+                wait_for(lambda: "Edit host" in view("essh:0"), "edit selected added host")
+                os.write(master,b"\x1b")
+                wait_for(lambda: "Main menu" in view("essh:0"), "Escape cancels edit form")
                 cli("open", "fixture")
                 wait_for(lambda: state(1) == "connected", "SSH connection")
                 tmux("send-keys", "-t", "essh:1", "export ESSH_PERSIST_MARKER=works", "Enter")
@@ -158,6 +176,12 @@ user="{pwd.getpwuid(os.getuid()).pw_name}"
                 data=json.loads(health_file.read_text())
                 assert data["details"]["mem_total"] > 0
                 assert data["details"]["processes"]
+                assert data["details"]["mem_cached"] is not None
+                transcript.clear()
+                os.write(master,b"\x1b[C")
+                wait_for(lambda: "offline" in transcript.decode(errors="replace") and "not live" in transcript.decode(errors="replace"), "browse host without a session")
+                os.write(master,b"\x1b[D")
+                drain(.5)
                 os.write(master, b"\x1bOP")
                 wait_for(lambda: "GETTING AROUND" in transcript.decode(errors="replace"), "F1 contextual help")
                 os.write(master, b"\x1bOP")
@@ -168,9 +192,22 @@ user="{pwd.getpwuid(os.getuid()).pw_name}"
                 wait_for(lambda: not (root / ".essh/tmux-v3" / (first + ".health-worker")).exists(), "detailed collector stops when dashboard closes")
                 assert "↓" in cli("status", "@1")
                 os.write(master, b"\x01m")
-                wait_for(lambda: len(tmux("list-panes", "-t", "essh:1", "-F", "#{pane_id}").splitlines()) == 1, "compatibility shortcut hides strip")
+                wait_for(lambda: "CPU" in view("essh:1.1") and "Processes" in view("essh:1.1"), "half-width health mode")
+                assert tmux("display-message","-p","-t","essh:1.1","#{pane_width}") == "60"
+                os.write(master, b"\x01m")
+                wait_for(lambda: len(tmux("list-panes", "-t", "essh:1", "-F", "#{pane_id}").splitlines()) == 1, "third toggle hides side health")
                 cli("open", "fixture", "--new")
                 wait_for(lambda: state(2) == "connected", "second independent session")
+                os.write(master,b"\x01m")
+                wait_for(lambda: len(tmux("list-panes","-t","essh:2").splitlines())==2,"strip on second session")
+                os.write(master,b"\x1b[15~")
+                wait_for(lambda: len(tmux("list-panes","-t","essh:1").splitlines())==2,"strip mode follows session switch")
+                os.write(master,b"\x01m")
+                wait_for(lambda: "Processes" in view("essh:1.1"),"half mode after switch")
+                os.write(master,b"\x01m")
+                wait_for(lambda: len(tmux("list-panes","-t","essh:1").splitlines())==1,"hide half view")
+                tmux("select-window","-t","essh:2")
+                wait_for(lambda: len(tmux("list-panes","-t","essh:2").splitlines())==1,"off mode follows session switch")
                 second = tmux("show-window-options", "-v", "-t", "essh:2", "@essh_id")
                 assert first != second
                 os.write(master, b"\x1b[15~")
@@ -197,16 +234,22 @@ user="{pwd.getpwuid(os.getuid()).pw_name}"
                 os.write(master,b"\x1b[<0;38;32M\x1b[<0;38;32m")
                 wait_for(lambda: tmux("display-message","-p","#{window_index}")=="0", "click Main status control")
                 drain(.4)
-                os.write(master,b"\x1b[<0;34;31M\x1b[<0;34;31m")
+                os.write(master,b"\x1b[<0;41;31M\x1b[<0;41;31m")
                 wait_for(lambda: tmux("display-message","-p","#{window_index}")=="2", "click session status tab")
+                drain(.4)
+                transcript.clear()
+                os.write(master,b"\x1b[<0;10;31M\x1b[<0;10;31m")
+                wait_for(lambda: "Health" in transcript.decode(errors="replace"), "click health status chip")
+                os.write(master,b"\x1b")
+                drain(.4)
                 # The shell variable proves we reattach the old shell, rather than
                 # silently substituting a freshly-created terminal after a drop.
                 subprocess.run([str(wrapper), "-S", f"/tmp/essh-{os.getuid()}/{first}", "-O", "exit", "127.0.0.1"], env=env, capture_output=True, check=True)
                 wait_for(lambda: "disconnected" in state(1), "disconnected state")
                 assert "unknown" in state(1)
                 tmux("select-window", "-t", "essh:1")
-                tmux("send-keys", "-t", "essh:1", "Enter")
-                wait_for(lambda: state(1) == "connected", "reattach after drop")
+                tmux("send-keys", "-t", "essh:1", "r")
+                wait_for(lambda: state(1) == "connected", "r reattaches after drop")
                 tmux("send-keys", "-t", "essh:1", "echo RECONNECTED_$ESSH_PERSIST_MARKER", "Enter")
                 wait_for(lambda: "RECONNECTED_works" in view("essh:1"), "persistent shell variable")
                 # Exercise the actual popup key binding, not a direct CLI helper.
@@ -238,7 +281,12 @@ user="{pwd.getpwuid(os.getuid()).pw_name}"
                 killed_id = tmux("show-window-options", "-v", "-t", "essh:1", "@essh_id")
                 os.write(master, b"\x01x")
                 drain(0.5)
-                os.write(master, b"yes\n")
+                os.write(master,b"n")
+                drain(.3)
+                assert len(tmux("list-sessions",remote=True).splitlines())==2
+                os.write(master,b"\x01x")
+                drain(.4)
+                os.write(master, b"y")
                 wait_for(lambda: len(tmux("list-windows", "-F", "#{@essh_id}").split()) == 1, "confirmed kill")
                 assert not (root / ".essh/tmux-v3" / (killed_id + ".json")).exists()
                 assert len(tmux("list-sessions", remote=True).splitlines()) == 1
@@ -251,13 +299,13 @@ user="{pwd.getpwuid(os.getuid()).pw_name}"
                 tmux("select-window", "-t", target)
                 os.write(master, b"\x01x")
                 drain(0.5)
-                os.write(master, b"yes\n")
+                os.write(master, b"y")
                 drain(2)
                 assert (root / ".essh/tmux-v3" / (retained_id + ".json")).exists()
                 assert len(tmux("list-windows", "-F", "#{@essh_id}").split()) == 1
                 assert len(tmux("list-sessions", remote=True).splitlines()) == 1
                 os.write(master, b"\n")
-                print("PASS: F1–F6 navigation, full dashboard, per-core/process metrics, mouse navigation, strip compatibility, reconnect, resize, restore, kill and failed-kill retention")
+                print("PASS: forms, filters, host health browsing, strip/half/off persistence, F1–F6, mouse navigation, real metrics, reconnect, resize, restore, kill confirmation and failed-kill retention")
             finally:
                 tmux("kill-server", check=False)
                 tmux("kill-server", remote=True, check=False)
