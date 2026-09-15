@@ -622,7 +622,7 @@ pub fn help() -> Result<()> {
     loop {
         screen.term.draw(|f| {
             background(f);let r=main_layout(f.area());line(f,r[0],"essh keys",CYAN);
-            f.render_widget(Paragraph::new("HOST LIST\n↑↓ jk  move     Enter  connect or reattach\n/  filter      a  add host     e  edit host\nq  quit; sessions keep running\n\nIN A SESSION — prefix Ctrl+A\n1–9  jump      s  switcher     n  new session\nm  strip       d  hosts        x  kill (confirmed)\nq  detach      ?  help         Ctrl+A  send prefix\n\nRemote tmux keeps its Ctrl+B prefix. Local essh shortcuts\nreplace some defaults; other tmux bindings remain available.\n\n● reachable  ● unreachable with saved session  ○ offline\nA saved session does not prove remote programs are alive.\nMetrics: current host only; hosts screen shows the clock.\nStrip: all non-loopback interfaces; TCP peer rates when available.")
+            f.render_widget(Paragraph::new("HOST LIST\n↑↓ jk  move     Enter  connect or reattach\n/  filter      a  add host     e  edit host\nq  quit; sessions keep running\n\nF2  toggle health strip (no prefix)\n\nIN A SESSION — prefix Ctrl+A\n1–9  jump      s  switcher     n  new session\nm  strip       d  hosts        x  kill (confirmed)\nq  detach      ?  help         Ctrl+A  send prefix\n\nRemote tmux keeps its Ctrl+B prefix. Local essh shortcuts\nreplace some defaults; other tmux bindings remain available.\n\n● reachable  ● unreachable with saved session  ○ offline\nA saved session does not prove remote programs are alive.\nMetrics: current host only; hosts screen shows the clock.\nStrip: all non-loopback interfaces; TCP peer rates when available.")
                 .style(Style::default().fg(TEXT)).wrap(Wrap{trim:false}).scroll((scroll, 0)),r[1]);
             line(f,r[2],"↑↓ scroll · Esc close",DIM);
         })?;
@@ -643,7 +643,7 @@ pub fn strip(id: &str) -> Result<()> {
         screen.term.draw(|f| {
             background(f);
             if f.area().width < 26 {
-                line(f, f.area(), "Resize or ^A m hide", DIM);
+                line(f, f.area(), "Resize or F2 hide", DIM);
                 return;
             }
             let inner = f.area().inner(Margin::new(1, 1));
@@ -742,7 +742,7 @@ pub fn strip(id: &str) -> Result<()> {
             } else {
                 line(f, r[1], "Metrics unavailable", DIM);
             }
-            line(f, r[8], "^A m hide", DIM);
+            line(f, r[8], "F2 hide", DIM);
         })?;
         let _ = key()?;
     }

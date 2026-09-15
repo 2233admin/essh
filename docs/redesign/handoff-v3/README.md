@@ -44,6 +44,10 @@ host names and tags, `a` adds a host, `e` edits a host, `?` opens help, `q` deta
 Host forms save to essh configuration; editing an SSH alias creates an essh
 connection override. SSH config entries themselves are not rewritten.
 
+**F2** toggles the health strip directly while connected, without a prefix.
+The original Ctrl+A then lowercase m shortcut also works. F2 is reserved by essh
+and is not passed through to the remote application.
+
 Local prefix is **Ctrl+A**:
 
 | Key after prefix | Action |

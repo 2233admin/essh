@@ -135,7 +135,7 @@
           <span style="color:#cbd5dd">10.0.0.4:22</span><span style="text-align:right">168k</span><span style="text-align:right">148k</span>
         </div>
 
-        <div style="margin-top:auto;color:#3f4b52;font-size:11px"><span style="color:#8b9aa6">^A m</span> hide</div>
+        <div style="margin-top:auto;color:#3f4b52;font-size:11px"><span style="color:#8b9aa6">F2</span> hide</div>
       </div>
     </div>
     </sc-if>
@@ -178,7 +178,7 @@
     <sc-if data-condition="isHelp">
     <div style="flex:1;padding:14px 18px;display:flex;flex-direction:column">
       <div style="color:#4fd1c5;font-weight:700;margin-bottom:6px">essh keys</div>
-      <div style="color:#5b6b7a;font-size:12px;margin-bottom:18px">essh is tmux underneath. essh overrides selected local tmux bindings. Remote prefix is Ctrl+B. Prefix is <span style="color:#4fd1c5">Ctrl+A</span>.</div>
+      <div style="color:#5b6b7a;font-size:12px;margin-bottom:18px">essh is tmux underneath. essh overrides selected local tmux bindings. Remote prefix is Ctrl+B. F2 toggles health directly. Local prefix is <span style="color:#4fd1c5">Ctrl+A</span>.</div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:26px;font-size:12.5px">
         <div>
           <div style="color:#cbd5dd;margin-bottom:8px">HOST LIST</div>
@@ -197,7 +197,7 @@
             <span style="color:#4fd1c5">^A 1–9</span><span>jump to session</span>
             <span style="color:#4fd1c5">^A s</span><span>switcher</span>
             <span style="color:#4fd1c5">^A n</span><span>new session on a host</span>
-            <span style="color:#4fd1c5">^A m</span><span>toggle netwatch strip</span>
+            <span style="color:#4fd1c5">F2</span><span>toggle netwatch strip</span>
             <span style="color:#4fd1c5">^A d</span><span>back to host list</span>
             <span style="color:#4fd1c5">^A x</span><span>kill this session</span>
           </div>
@@ -252,7 +252,7 @@
         <div>Health dashboard, "needs attention", host cards, busiest-processes list, reachability panel.</div>
         <div>Broadcast, activity log, quick-connect panel, command palette, config screen.</div>
         <div>File browser and port forwards — use <span style="color:#cbd5dd">scp</span> / <span style="color:#cbd5dd">ssh -L</span> inside the session; can return later as tmux popups.</div>
-        <div>Numbered btop panels, meters with gradient ramps, six function keys. Down to <span style="color:#cbd5dd">12 keys</span> total, with explicit local bindings.</div>
+        <div>Numbered btop panels, gradient meters, and the full function-key toolbar. <span style="color:#cbd5dd">F2</span> toggles the health strip directly.</div>
       </div>
     </div>
   </div>

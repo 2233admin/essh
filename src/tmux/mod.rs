@@ -364,6 +364,14 @@ fn configure() -> Result<()> {
     ])?;
     call(&[
         "bind-key",
+        "-n",
+        "F2",
+        "run-shell",
+        "-b",
+        &helper(&["toggle", "#{window_id}"])?,
+    ])?;
+    call(&[
+        "bind-key",
         "m",
         "run-shell",
         "-b",

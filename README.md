@@ -6,7 +6,7 @@ and remote tmux on the hosts you connect to.
 
 - Hosts come from SSH configuration, essh configuration, and the existing host cache.
 - Enter connects; Ctrl+A s switches sessions; Ctrl+A n opens another.
-- Ctrl+A m toggles the metrics strip; Ctrl+A d returns to hosts.
+- F2 toggles the health strip directly; Ctrl+A d returns to hosts.
 - q on hosts (or Ctrl+A q in a session) detaches without ending remote work.
 - Ctrl+A x confirms before terminating a remote session.
 - Ctrl+B reaches remote tmux; Ctrl+A is the local prefix.

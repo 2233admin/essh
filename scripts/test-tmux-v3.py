@@ -133,12 +133,12 @@ user="{pwd.getpwuid(os.getuid()).pw_name}"
                 first = tmux("show-window-options", "-v", "-t", "essh:1", "@essh_id")
                 cli("open", "fixture")
                 assert len(tmux("list-windows", "-t", "essh").splitlines()) == 2
-                cli("toggle", "@1")
+                os.write(master, b"\x1bOQ")
                 wait_for(lambda: "RX" in view("essh:1.1") and "cpu" in view("essh:1.1"), "metrics strip")
                 assert "RX/s" in view("essh:1.1")
                 assert "↓" in cli("status", "@1")
-                cli("toggle", "@1")
-                assert tmux("list-panes", "-t", "essh:1", "-F", "#{pane_id}").count("\n") == 0
+                os.write(master, b"\x1bOQ")
+                wait_for(lambda: len(tmux("list-panes", "-t", "essh:1", "-F", "#{pane_id}").splitlines()) == 1, "F2 hides strip")
                 cli("open", "fixture", "--new")
                 wait_for(lambda: state(2) == "connected", "second independent session")
                 second = tmux("show-window-options", "-v", "-t", "essh:2", "@essh_id")
