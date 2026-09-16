@@ -1639,7 +1639,9 @@ async fn tui_main_loop(
                                 // bar, not a message.
                                 if tui_state.fleet_sample_refusal.is_none() {
                                     tui_state.fleet_sample_refusal = Some(why.clone());
-                                    app.set_status(format!("host metrics unavailable: {why}"));
+                                    app.set_background_status(format!(
+                                        "host metrics unavailable: {why}"
+                                    ));
                                 }
                             }
                         }

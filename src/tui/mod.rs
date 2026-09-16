@@ -1018,6 +1018,13 @@ impl App {
         self.status_set_at = Some(std::time::Instant::now());
     }
 
+    /// Background diagnostics must not replace feedback from a user action.
+    pub fn set_background_status(&mut self, msg: String) {
+        if self.fresh_status().is_none() {
+            self.set_status(msg);
+        }
+    }
+
     /// The status, while it is still fresh.
     ///
     /// Statuses expire so the hint strip goes back to being hints. Without an
@@ -1441,6 +1448,18 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn background_warning_preserves_recent_connection_error() {
+        let mut app = super::App::new(4);
+        app.set_status("could not connect to host".into());
+        app.set_background_status("host metrics unavailable".into());
+        assert_eq!(app.fresh_status(), Some("could not connect to host"));
+
+        app.status_set_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(7));
+        app.set_background_status("host metrics unavailable".into());
+        assert_eq!(app.fresh_status(), Some("host metrics unavailable"));
+    }
+
     use super::*;
 
     fn make_host(name: &str, hostname: &str, tags: &str) -> HostDisplay {
