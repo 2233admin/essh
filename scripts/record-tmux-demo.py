@@ -70,7 +70,8 @@ LogLevel ERROR
         wrapper.write_text(f"#!/bin/sh\nexec {shlex.quote(shutil.which('ssh'))} -F {shlex.quote(str(root / 'ssh_config'))} \"$@\"\n")
         wrapper.chmod(0o755)
         env["PATH"] = str(root / "bin") + os.pathsep + os.environ["PATH"]
-        (root / ".essh/config.toml").write_text(f"""[[hosts]]
+        (root / ".essh/config.toml").write_text(f"""theme="netwatch"
+[[hosts]]
 name="fixture"
 hostname="127.0.0.1"
 port={port}
@@ -181,15 +182,33 @@ port=1
             chapter('Storage triage · filesystems and block devices', 'df -hT  ·  lsblk -o NAME,SIZE,TYPE,MOUNTPOINTS')
             command('clear; df -hT / /home /tmp; lsblk -o NAME,SIZE,TYPE,MOUNTPOINTS | head -12', 'MOUNTPOINTS', 1.5)
             checkpoint('Filesystem', 'MOUNTPOINTS')
+            shell_pid = tmux('display-message', '-p', '-t', 'essh:1.0', '#{pane_pid}')
+            chapter('Choose a theme · terminal and health share the palette', 'Ctrl+A then t · arrows preview · Enter saves')
+            press(b'\x01t')
+            wait_for(lambda: seen('Themes ·'), 'Theme picker opens from shell')
+            drain(1.5)
+            checkpoint('Themes ·', 'netwatch')
+            press(b'\x1b[H\x1b[B\x1b[B\r')
+            wait_for(lambda: tmux('show-options', '-wAv', '-t', 'essh:1', 'window-style') == 'bg=#ffffff,fg=#1e1e1e', 'Light theme reaches terminal')
+            chapter('Light theme · saved colors reach the running shell', 'The same shell stays running while colors change')
+            drain(1.5)
+            checkpoint('Filesystem')
+            press(b'\x01t')
+            wait_for(lambda: seen('Themes ·'), 'Reopen theme picker')
+            press(b'\x1b[H\x1b[B\r')
+            wait_for(lambda: tmux('show-options', '-wAv', '-t', 'essh:1', 'window-style') == 'bg=#080f13,fg=#c8d4d9', 'Netwatch theme reaches terminal')
+            assert tmux('display-message', '-p', '-t', 'essh:1.0', '#{pane_pid}') == shell_pid
+            checks.append({'check': 'Theme changes preserve running shell', 'passed': True})
+            drain(.6)
             first = tmux('show-window-options', '-v', '-t', 'essh:1', '@essh_id')
             chapter('Side health · thin meters beside your terminal', 'F2 · terminal → strip')
             press(b'\x1bOQ')
-            wait_for(lambda: tmux('show-options','-gv','@essh_side_mode')=='1' and 'cpu' in view('essh:1.1'), 'F2 side strip')
+            wait_for(lambda: tmux('show-options','-gv','@essh_side_mode',check=False)=='1' and 'cpu' in view('essh:1.1'), 'F2 side strip')
             command('ps -eo pid,comm,%cpu,%mem --sort=-%cpu | head -9', '%CPU', 2)
             checkpoint('cpu', '%CPU')
             chapter('Half health · terminal and dashboard together', 'F2 · strip → half')
             press(b'\x1bOQ')
-            wait_for(lambda: tmux('show-options','-gv','@essh_side_mode')=='2' and 'Processes' in view('essh:1.1'), 'F2 half dashboard')
+            wait_for(lambda: tmux('show-options','-gv','@essh_side_mode',check=False)=='2' and 'Processes' in view('essh:1.1'), 'F2 half dashboard')
             command('vmstat 1 3', 'swpd', 3)
             checkpoint('Processes', 'swpd')
             chapter('Full health · network, CPU, memory, disks and processes', 'F2 · half → full')
@@ -211,7 +230,7 @@ port=1
             drain(.3)
             chapter('Return to your terminal', 'F2 · full → terminal')
             press(b'\x1bOQ')
-            wait_for(lambda: tmux('show-options','-gv','@essh_side_mode')=='0' and len(tmux('list-panes','-t','essh:1').splitlines())==1,'F2 completes cycle without duplicate panes')
+            wait_for(lambda: tmux('show-options','-gv','@essh_side_mode',check=False)=='0' and len(tmux('list-panes','-t','essh:1').splitlines())==1,'F2 completes cycle without duplicate panes')
             drain(.6)
             chapter('Open another session', 'F3 Sessions  n New session  Enter Connect')
             press(b'\x1bOR')

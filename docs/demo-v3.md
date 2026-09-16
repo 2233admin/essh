@@ -4,7 +4,7 @@ The tour records the real release binary in a 192-column × 46-row terminal agai
 an isolated, loopback-only SSH server. It uses ephemeral keys and separate local
 and remote tmux sockets. Existing ESSH sessions and SSH configuration are untouched.
 
-[Watch the verified demo](https://github.com/matthart1983/essh/releases/download/v0.4.0/essh-v3-demo.mp4).
+[Watch the verified demo](media/essh-demo.mp4).
 
 Connection and reconnect waits are shortened to 0.6 seconds. Command output and
 deliberate dashboard/help reading pauses retain their timing. The original cast
@@ -42,6 +42,8 @@ Outputs:
 - Processes: `ps -eo pid,comm,%cpu,%mem --sort=-%cpu` finds busy processes.
 - System activity: `vmstat 1 3` samples CPU, memory, swap and I/O.
 - Network: `ss -lntu` and `ip -br address` inspect listeners and interfaces.
+- Ctrl+A, then `t`: preview and save Light, then return to Netwatch. Terminal
+  colors change while the same SSH shell keeps running.
 - F2: terminal → thin side strip → half dashboard → full dashboard → terminal.
 - Live CPU, memory, disk, network and process telemetry; offline host browsing.
 - Independent sessions, F3 picker, F5/F6 switching, and number selection.
@@ -57,9 +59,9 @@ recording. Telemetry comes from the local demo host and varies between runs.
 
 ## Verification
 
-The published video is 37.8 seconds, H.264, 1700 × 1200. All 25 behavior
-checks and 14 rendered-output checks passed, along with full video decoding.
-The half dashboard, admin command output and exported full-health frame were
+The video is 42.3 seconds, H.264, 1700 × 1200. All 30 behavior
+checks and 17 rendered-output checks passed, along with full video decoding.
+The theme picker, Light terminal, half dashboard and full-health frames were
 visually reviewed. Initial metrics may show unavailable values while sampling
 starts. The fixture leaves existing user sessions intact.
 
@@ -75,5 +77,5 @@ ffmpeg -y -i docs/media/essh-demo.mp4 -filter_complex \
   -loop 0 docs/media/essh-demo.gif
 ```
 
-The preview links to the full-resolution release video. Both show the same
+The preview links to the full-resolution video in the repository. Both show the same
 verified workflow, including the pauses on health and help screens.
