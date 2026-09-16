@@ -1,77 +1,126 @@
-# essh — persistent SSH workspace
+# essh
 
-ESSH v0.4.0 brings the v3 tmux workspace: persistent remote shells, keyboard and
-mouse session navigation, and live Linux health dashboards with thin meters.
+**An SSH workspace with persistent sessions and live health dashboards.**
 
-## Demo
+Keep remote shells running across connection drops, switch between hosts with
+keys or the mouse, and check system health without leaving your terminal.
+ESSH uses OpenSSH for connections and tmux to keep your work alive.
 
-[![Full health dashboard](docs/media/essh-v3-health.png)](https://github.com/matthart1983/essh/releases/download/v0.4.0/essh-v3-demo.mp4)
+## See it in action
 
-**[Watch the admin workflow demo](https://github.com/matthart1983/essh/releases/download/v0.4.0/essh-v3-demo.mp4)** ·
-[Recording and verification](docs/demo-v3.md)
+[![ESSH admin workflow: Linux commands, health dashboards and session switching](docs/media/essh-demo.gif)](https://github.com/matthart1983/essh/releases/download/v0.4.0/essh-v3-demo.mp4)
 
-Real SSH, real command output: inspect disks with `df`/`lsblk`, find busy processes
-with `ps`, sample activity with `vmstat`, and inspect sockets/interfaces with
-`ss`/`ip`. The tour shows every health layout, session switching, help, and recovery
-after a connection drop. Connection waits are shortened; key screens pause for reading.
+**[Watch the 38-second demo](https://github.com/matthart1983/essh/releases/download/v0.4.0/essh-v3-demo.mp4)** ·
+[Download the browser replay](https://github.com/matthart1983/essh/releases/download/v0.4.0/essh-v3-replay.html)
 
-## Get started
+Inspect disks with `df` and `lsblk`, find busy processes with `ps`, sample system
+activity with `vmstat`, and check sockets and interfaces with `ss` and `ip`.
+The demo shows the side, half and full health views, session switching, help,
+and a dropped connection recovering the same remote shell.
 
-Download the binary for your platform from
-[Releases](https://github.com/matthart1983/essh/releases/latest), or build from source:
+## Install
+
+Download a binary for **Linux or macOS**, on **x86_64 or ARM64**, from
+[Releases](https://github.com/matthart1983/essh/releases/latest). Extract the archive
+and put `essh` somewhere on your `PATH`.
+
+You need **tmux 3.3+ and OpenSSH locally**, and **tmux on each remote host**.
+Detailed health metrics are available for Linux hosts.
+
+Or build from source with Rust:
 
 ```sh
+git clone https://github.com/matthart1983/essh.git
+cd essh
 cargo build --release
 ./target/release/essh
 ```
 
-Requires **local tmux 3.3+ and OpenSSH**, plus **tmux on remote hosts**.
-Hosts come from SSH configuration, ESSH configuration, and the existing host cache.
-Choose a host and press Enter. Linux telemetry is optional; unavailable readings
-show `—` rather than invented values.
+## Connect to a host
 
-## Navigation
+ESSH reads hosts from `~/.ssh/config`, its own configuration, and its host cache.
+For example:
+
+```sshconfig
+Host web-01
+    HostName 192.168.1.20
+    User deploy
+    IdentityFile ~/.ssh/id_ed25519
+```
+
+Run `essh`, select a host, and press **Enter**. Use **/** to filter hosts and
+**Esc** to clear the filter. Press **a** to add a host or **e** to edit one.
+OpenSSH handles authentication and host-key checking.
+
+## Find your way around
 
 | Key | Action |
 | --- | --- |
-| F1 | Open/close navigation help |
-| F2 | Cycle **terminal → side strip → half health → full health → terminal** |
-| F3 | Sessions: select, reconnect, or press `n` for another session |
-| F4 | Main menu; remote sessions keep running |
-| F5 / F6 | Previous / next session |
-| `/` on Hosts | Filter hosts; Esc clears the filter |
-| `h` on Hosts | Health for the selected host, including offline hosts |
-| `r` after a drop | Reconnect to the remote session |
-| `q` on Hosts | Detach without ending remote work |
+| **F1** | Open or close help |
+| **F2** | Cycle terminal → side health → half health → full health → terminal |
+| **F3** | Open Sessions; select a session or press **n** to start another |
+| **F4** | Return to the main menu while sessions keep running |
+| **F5 / F6** | Switch to the previous / next session |
+| **h** on Hosts | Open health for the selected host |
+| **r** after a connection drop | Reconnect |
+| **q** on Hosts | Leave ESSH while remote work keeps running |
 
-Click session tabs and navigation controls, click rows to select, and double-click
-to connect/switch. Wheel scrolls; click panes to focus them and drag dividers to resize.
+Click session tabs and navigation controls to switch views. Click a row to select
+it; double-click to connect or switch. Use the mouse wheel to scroll, click panes
+to focus them, and drag dividers to resize them.
 
-### Health views
+If your keyboard uses the function row for brightness or volume, hold **Fn**
+while pressing an F-key, or enable standard function keys in your keyboard settings.
+The navigation controls are also clickable, and **F1** lists the available keys.
 
-F2 cycles all four layouts. The side strip keeps metrics beside the terminal;
-half health shares the screen with the shell; full health shows network, CPU,
-memory, storage, peers and processes. Narrow terminals skip side layouts.
+## Choose your health view
 
-- **Tab** selects a panel; **arrows/wheel** scroll.
-- **i** selects an interface; **c/m** sorts processes by CPU/memory.
-- **Left/Right** browses hosts, including disconnected hosts.
+Press **F2** to cycle through:
+
+| View | What you see |
+| --- | --- |
+| Terminal | Your shell with the session and navigation bars |
+| Side health | A narrow strip with traffic, CPU, memory, disk and latency |
+| Half health | Your shell and a dashboard sharing the terminal |
+| Full health | Network traffic, CPU cores, memory, storage, peers and processes |
+
+The dashboards use thin meters and live readings. Unavailable readings show **—**;
+disconnected hosts are clearly marked. Narrow terminals skip the side layouts.
+
+In the dashboard:
+
+- **Tab** selects a panel; **arrows** and the **mouse wheel** scroll.
+- **i** selects a network interface; **c / m** sorts processes by CPU or memory.
+- **Left / Right** browses hosts, including hosts without a connected session.
 - **Esc** closes full health and restores the previous side view.
-- **Ctrl+A, then h** opens full health directly.
-- **Ctrl+A, then m** cycles strip → half → off.
+- **F2** from full health returns to the terminal with side health off.
 
-### Sessions and remote tmux
+For direct access, press **Ctrl+A**, release it, then **h** for full health or
+**m** to cycle side health → half health → off.
 
-**Ctrl+A** is the local prefix; **Ctrl+B** controls remote tmux. For example,
-Ctrl+B then `%` splits the remote terminal side by side, and Ctrl+B then `"`
-splits it top/bottom. Ctrl+B then an arrow changes the remote pane.
+## Work across sessions and panes
 
-Function keys F1–F6 are reserved for ESSH. **Ctrl+A, then v** forwards the next key
-to the remote application. **Ctrl+A, then x** asks before terminating a session.
+Use **F3**, then **n**, to open another independent session. Switch with
+**F5 / F6**, the Sessions picker, or the mouse. **F4** returns to the host list
+without ending your sessions.
 
-Session IDs survive local restarts. Reconnect reattaches the same remote shell
-when it still exists; if it ended, reconnect creates a new shell. Disconnected
-remote state is shown as unverified. OpenSSH handles authentication and host-key checks.
+Session IDs survive local restarts. Reconnecting reattaches the remote shell
+when it still exists; if it has ended, ESSH starts a new shell. A disconnected
+session's remote state remains unverified until you reconnect.
+
+**Ctrl+A** controls local tmux. **Ctrl+B** controls tmux on the remote host.
+Press the prefix, release it, then press the next key:
+
+| Keys | Action |
+| --- | --- |
+| **Ctrl+B**, then **%** | Split the remote terminal side by side |
+| **Ctrl+B**, then **"** | Split the remote terminal top and bottom |
+| **Ctrl+B**, then an **arrow** | Move between remote panes |
+| **Ctrl+A**, then **v** | Send the next key directly to the remote application |
+| **Ctrl+A**, then **x** | Terminate a remote session after confirmation |
+
+F1–F6 are reserved for ESSH. Use **Ctrl+A**, then **v**, when a remote application
+needs one of those keys.
 
 ## Development
 
@@ -83,240 +132,11 @@ cargo build --release
 ESSH_BIN=target/release/essh python3 scripts/test-tmux-v3.py
 ```
 
-[Architecture](docs/redesign/handoff-v3/README.md) ·
-[Design reference](docs/redesign/handoff-v3/index.html)
+The live regression check uses an isolated SSH server and tmux sockets.
+[Demo recording and verification](docs/demo-v3.md) explains how to reproduce the tour.
 
-## Legacy interface and CLI reference
-
----
-
-<p align="center">
-
-```
-                         ███████╗███████╗███████╗██╗  ██╗
-                         ██╔════╝██╔════╝██╔════╝██║  ██║
-                         █████╗  ███████╗███████╗███████║
-                         ██╔══╝  ╚════██║╚════██║██╔══██║
-                         ███████╗███████║███████║██║  ██║
-                         ╚══════╝╚══════╝╚══════╝╚═╝  ╚═╝
-                           Enhanced SSH for people with fleets
-```
-
-</p>
-
-<p align="center">
-  <a href="https://crates.io/crates/essh"><img src="https://img.shields.io/crates/v/essh.svg" alt="crates.io"></a>
-  <a href="https://github.com/matthart1983/essh/actions/workflows/ci.yml"><img src="https://github.com/matthart1983/essh/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/matthart1983/essh/blob/main/LICENSE"><img src="https://img.shields.io/crates/l/essh.svg" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/macOS-supported-111111?logo=apple&logoColor=white" alt="macOS">
-  <img src="https://img.shields.io/badge/Linux-supported-FCC624?logo=linux&logoColor=black" alt="Linux">
-</p>
-
-<p align="center">
-  A pure-Rust SSH client with a dense, Netwatch-style TUI. Multiple sessions,
-  and live metrics for every host in your config, not just the one you are
-  attached to.
-</p>
-
-The sections below describe the previous interface, available with `essh legacy`,
-and the existing command-line utilities. The default `essh` interface is the tmux
-workspace documented above.
-
-## Install
-
-```bash
-cargo install essh
-```
-
-Or grab a binary for macOS or Linux, arm64 or x86_64, from
-[Releases](https://github.com/matthart1983/essh/releases/latest).
-
-From source:
-
-```bash
-git clone https://github.com/matthart1983/essh && cd essh
-cargo build --release        # ./target/release/essh
-```
-
-## Start
-
-```bash
-essh                          # launcher: type to search, Enter to connect
-essh connect deploy@web-01    # straight to a host
-essh workspace open prod      # restore a saved set of sessions
-essh run web -- uptime        # fan a command across a tagged group
-```
-
-Hosts come from `~/.ssh/config` — including `IdentityFile`, `ProxyJump` and
-`Match` — so there is nothing to import before you start.
-
-## Keys
-
-Everything common is one keypress. The shell keeps every `Ctrl` combination,
-so `Ctrl+D` still means EOF and `Ctrl+C` still interrupts.
-
-| | | | |
-|---|---|---|---|
-| `F1` help | `F2` monitor | `F3` files | `F4` port forwards |
-| `F5` mini monitor | `F6` detach | `F7`/`F8` prev/next session | `F9` new session |
-| `F10` command menu | | | |
-
-**On macOS**, that row is brightness and volume out of the box — `F10` mutes.
-Either hold `fn` with them, or turn on *System Settings → Keyboard → Use F1, F2,
-etc. as standard function keys* once. The prefix route below needs neither and
-works everywhere.
-
-For anything else, press `Ctrl+A`, let go, then the key — `s` split, `w` close,
-`t` theme, `1`–`9` jump to session, `[`/`]` resize. The strip along the bottom
-of a session lists the keys that apply right now, so there is nothing to
-memorise. Change the prefix with `prefix_key` under `[session]`.
-
-`Option`/`Alt` combinations work on the dashboard and the other screens, but
-**not while a shell has focus** — there essh claims exactly one key, the prefix,
-and forwards everything else, so `Alt+f` stays readline's forward-word and
-`Alt+.` stays yank-last-argument. In a session it is function keys or the
-prefix.
-
-## What it does
-
-| | |
-|---|---|
-| **Multiple sessions** | Tabs and splits in one window, with per-session scrollback and reconnect. |
-| **Live host monitor** | CPU, memory, disk, network and top processes, sampled in the background so the view is warm when you open it. No agent — plain SSH exec channels. |
-| **Fleet health** | The same readings for every host in your config, including the ones you have no session on. What needs attention, in sentences, with the process responsible named. |
-| **Divergence** | On request: compares each host against its peer set and tells you *which* host differs, on *which* facet, and why. |
-| **File transfer** | Two-pane local/remote browser over SFTP. |
-| **Port forwarding** | Local and remote, added and removed without dropping the session. State is the bind result, so `active` means something is listening. |
-| **Audit and replay** | Structured JSON audit log; sessions record to asciicast for replay. |
-
-### Fleet health
-
-Eleven hosts, and one of them is the one you should be looking at. A column of
-green dots structurally cannot tell you which.
-
-The hosts screen carries CPU, memory, disk and RTT for **every host in your
-config**, not only the one you are attached to. Nothing runs on them: essh
-opens one connection per host, keeps it warm, and runs one command on it every
-few seconds. A host that answers but will not give up its numbers says so; a
-host that never answered shows no numbers at all, and never a `0`.
-
-The health screen leads with what is wrong, in words:
-
-```
-1  needs attention  │  2 of 11 hosts
-
-   build-01         cpu 94%   over 90% for 4m — cargo build in session 4
-   staging-web-01   offline   no answer on 10.0.4.20:22 since 12:10 · no session was open
-```
-
-and says so when nothing is:
-
-```
-nothing needs attention · 11 hosts reachable, none over threshold
-```
-
-Under it: cards for the hosts that need watching, the busiest processes across
-the whole fleet with identical siblings collapsed, and one RTT graph per host.
-
-A host that has gone away keeps its last reading and is labelled as showing
-one. A host that never answered is not the same thing and does not pretend to
-be. `r` reconnects or retries, everywhere it appears.
-
-### Divergence
-
-Forty web servers, thirty-nine fine, and one with a different kernel or a
-hand-edited `nginx.conf`. That question is worth asking and is not worth
-putting in a column everybody has to read, so it is a command:
-
-```bash
-essh diff role=web            # compare a tag's hosts, facet by facet
-essh why edge-01              # why one host will not connect
-```
-
-```
-role=web  95.4% agree · 146 of 153 checks · 3 of 9 hosts at consensus
-
-edge-01
-  timezone                     IST+0100 · 8 of 9 peers have UTC+0000
-  /etc/ssh/sshd_config         d362f7b1a9f7f3b7 · 8 of 9 peers have adf24088ca9817ee
-```
-
-Hosts it could not reach are named and excluded, never counted as agreeing.
-`D` on the hosts screen opens the same comparison for the host under the
-cursor.
-
-## Themes
-
-Eight, cycled with `t` (and `Alt+t` inside a session, where `t` belongs to the
-shell), persisted to the config:
-
-**dark** (default) · **terminal** · **light** · **solarized** · **dracula** · **nord** · **ocean** · **sky**
-
-`terminal` pins no colours of its own — every slot resolves to an ANSI entry and
-foreground and background use your terminal's own, so pywal, matugen or a
-terminal profile carries straight through. `sky` and `light` paint their own
-ground; `ocean` uses your terminal's with a fixed palette on top.
-
-Or jump straight to one from the command menu — `F10`, or `Ctrl+P` outside a
-session — and type its name.
-
-```bash
-essh --theme terminal        # also accepts: system, ansi
-essh --theme dracula hosts list
-```
-
-The flag applies for one run and is not written back, so it's a way to try one
-without committing. `t` in the TUI changes it and saves.
-
-## Configuration
-
-State lives in `~/.essh/`: `config.toml`, `cache.db`, `audit.log`,
-`sessions/`, `recordings/`, `known_cas/`.
-
-```bash
-essh config init      # write a default config
-essh config edit      # open it in $EDITOR
-essh config resolve web-01   # show how ssh_config resolves a host
-```
-
-Host keys are verified and cached, with a configurable TOFU policy
-(`strict`, `prompt`, `auto`). Ciphers and KEX algorithms can be restricted.
-
-Full configuration and architecture reference: [SPEC.md](SPEC.md).
-
-## CLI
-
-```bash
-essh hosts list | add | remove | import | health
-essh keys list | add | remove
-essh workspace list | open | save | show | remove
-essh session list | replay <id>
-essh diag <session-id>        # diagnostics for a past session
-essh why <host>               # explain why a host will not connect
-essh diff <tag>               # compare configuration across a tag's hosts
-essh audit tail --lines 20
-essh bench                    # published performance numbers
-```
-
-## Development
-
-```bash
-cargo test
-cargo clippy --all-targets --all-features -- -D warnings
-cargo fmt --check
-```
-
-CI runs all three on every push.
-
-`tests/tui_harness.rs` drives the real binary on a PTY and asserts on a parsed
-terminal screen with a deadline, because the failures that matter in a TUI are
-the absence of a frame rather than a wrong one. The tests that need SSH skip
-themselves when no host is reachable.
-
-## Contributing
-
-Fork, branch, make the change, run the three checks above, open a PR.
+To contribute, create a branch, make your change, run the checks, and open a pull request.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+[MIT](LICENSE)

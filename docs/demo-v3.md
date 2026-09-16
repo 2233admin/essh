@@ -1,4 +1,4 @@
-# ESSH v0.4.0 recorded admin tour
+# ESSH admin workflow demo
 
 The tour records the real release binary in a 192-column × 46-row terminal against
 an isolated, loopback-only SSH server. It uses ephemeral keys and separate local
@@ -55,10 +55,25 @@ The automated mouse action sends terminal mouse events at the Sessions control;
 the caption identifies the action. This is a terminal replay, not a desktop camera
 recording. Telemetry comes from the local demo host and varies between runs.
 
-## v0.4.0 verification
+## Verification
 
 The published video is 37.8 seconds, H.264, 1700 × 1200. All 25 behavior
 checks and 14 rendered-output checks passed, along with full video decoding.
 The half dashboard, admin command output and exported full-health frame were
 visually reviewed. Initial metrics may show unavailable values while sampling
 starts. The fixture leaves existing user sessions intact.
+
+## Update the README preview
+
+After verifying the recording, copy the full-quality video into the repository
+and generate the animated preview used by the README:
+
+```sh
+cp artifacts/demo/essh-v3-demo.mp4 docs/media/essh-demo.mp4
+ffmpeg -y -i docs/media/essh-demo.mp4 -filter_complex \
+  '[0:v]fps=10,scale=1000:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=3' \
+  -loop 0 docs/media/essh-demo.gif
+```
+
+The preview links to the full-resolution release video. Both show the same
+verified workflow, including the pauses on health and help screens.
