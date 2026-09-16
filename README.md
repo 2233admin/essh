@@ -1,40 +1,92 @@
-# essh v3 — persistent SSH workspace
+# essh — persistent SSH workspace
 
-This branch builds the tmux-based redesign. Run `cargo build --release`, then
-`./target/release/essh` from a terminal. It requires local tmux 3.3+, OpenSSH,
-and remote tmux on the hosts you connect to.
+ESSH v0.4.0 brings the v3 tmux workspace: persistent remote shells, keyboard and
+mouse session navigation, and live Linux health dashboards with thin meters.
 
-- Hosts come from SSH configuration, essh configuration, and the existing host cache.
-- Enter connects; Ctrl+A s switches sessions; Ctrl+A n opens another.
-- F1 opens Help; F2 cycles strip → half health → full health → terminal; F3 opens Sessions.
-- F4 returns to the main menu; F5/F6 switch to the previous/next session.
-- Click session tabs and navigation controls, or use the keyboard.
-- In Health: Tab changes panel, arrows/wheel scroll, i selects an interface,
-  c/m sorts processes, Left/Right browses hosts, and b cycles the side mode.
-- Ctrl+A m cycles strip → half-width health → off; Ctrl+A h opens full health.
-- h on Hosts opens health for the selected host, including disconnected hosts.
-- F2 from full health returns to the terminal with side health off.
-- Esc closes full health and restores the previous side view.
-- q on hosts (or Ctrl+A q in a session) detaches without ending remote work.
-- Ctrl+A x confirms before terminating a remote session.
-- Ctrl+B reaches remote tmux; Ctrl+A is the local prefix.
+## Demo
 
-The six function keys are reserved for essh; Ctrl+A then v sends the next key
-directly to the remote terminal. In-app F1 help documents all navigation.
+[![Full health dashboard](docs/media/essh-v3-health.png)](https://github.com/matthart1983/essh/releases/download/v0.4.0/essh-v3-demo.mp4)
 
-The local controller and remote sessions use separate tmux servers. Session IDs
-are saved across local restarts. Disconnected sessions show unverified remote
-state; reconnect recreates a shell if the old session has ended. OpenSSH handles
-authentication and known-hosts checking. Metrics are optional and currently Linux
-based; unavailable readings display as missing values.
+**[Watch the admin workflow demo](https://github.com/matthart1983/essh/releases/download/v0.4.0/essh-v3-demo.mp4)** ·
+[Recording and verification](docs/demo-v3.md)
 
-[Architecture and corrected handoff](docs/redesign/handoff-v3/README.md) ·
-[Standalone design reference](docs/redesign/handoff-v3/index.html)
+Real SSH, real command output: inspect disks with `df`/`lsblk`, find busy processes
+with `ps`, sample activity with `vmstat`, and inspect sockets/interfaces with
+`ss`/`ip`. The tour shows every health layout, session switching, help, and recovery
+after a connection drop. Connection waits are shortened; key screens pause for reading.
 
-Validate with `cargo test`, `cargo clippy --all-targets`, and the live SSH
-regression check `python3 scripts/test-tmux-v3.py`. The previous interface
-is available through `essh legacy`; its documentation follows for existing CLI
-workflows. The v3 interface uses the fixed netwatch palette.
+## Get started
+
+Download the binary for your platform from
+[Releases](https://github.com/matthart1983/essh/releases/latest), or build from source:
+
+```sh
+cargo build --release
+./target/release/essh
+```
+
+Requires **local tmux 3.3+ and OpenSSH**, plus **tmux on remote hosts**.
+Hosts come from SSH configuration, ESSH configuration, and the existing host cache.
+Choose a host and press Enter. Linux telemetry is optional; unavailable readings
+show `—` rather than invented values.
+
+## Navigation
+
+| Key | Action |
+| --- | --- |
+| F1 | Open/close navigation help |
+| F2 | Cycle **terminal → side strip → half health → full health → terminal** |
+| F3 | Sessions: select, reconnect, or press `n` for another session |
+| F4 | Main menu; remote sessions keep running |
+| F5 / F6 | Previous / next session |
+| `/` on Hosts | Filter hosts; Esc clears the filter |
+| `h` on Hosts | Health for the selected host, including offline hosts |
+| `r` after a drop | Reconnect to the remote session |
+| `q` on Hosts | Detach without ending remote work |
+
+Click session tabs and navigation controls, click rows to select, and double-click
+to connect/switch. Wheel scrolls; click panes to focus them and drag dividers to resize.
+
+### Health views
+
+F2 cycles all four layouts. The side strip keeps metrics beside the terminal;
+half health shares the screen with the shell; full health shows network, CPU,
+memory, storage, peers and processes. Narrow terminals skip side layouts.
+
+- **Tab** selects a panel; **arrows/wheel** scroll.
+- **i** selects an interface; **c/m** sorts processes by CPU/memory.
+- **Left/Right** browses hosts, including disconnected hosts.
+- **Esc** closes full health and restores the previous side view.
+- **Ctrl+A, then h** opens full health directly.
+- **Ctrl+A, then m** cycles strip → half → off.
+
+### Sessions and remote tmux
+
+**Ctrl+A** is the local prefix; **Ctrl+B** controls remote tmux. For example,
+Ctrl+B then `%` splits the remote terminal side by side, and Ctrl+B then `"`
+splits it top/bottom. Ctrl+B then an arrow changes the remote pane.
+
+Function keys F1–F6 are reserved for ESSH. **Ctrl+A, then v** forwards the next key
+to the remote application. **Ctrl+A, then x** asks before terminating a session.
+
+Session IDs survive local restarts. Reconnect reattaches the same remote shell
+when it still exists; if it ended, reconnect creates a new shell. Disconnected
+remote state is shown as unverified. OpenSSH handles authentication and host-key checks.
+
+## Development
+
+```sh
+cargo fmt --check
+cargo test
+cargo clippy --all-targets --all-features -- -D warnings
+cargo build --release
+ESSH_BIN=target/release/essh python3 scripts/test-tmux-v3.py
+```
+
+[Architecture](docs/redesign/handoff-v3/README.md) ·
+[Design reference](docs/redesign/handoff-v3/index.html)
+
+## Legacy interface and CLI reference
 
 ---
 
@@ -66,11 +118,9 @@ workflows. The v3 interface uses the fixed netwatch palette.
   attached to.
 </p>
 
-![ESSH Demo](https://raw.githubusercontent.com/matthart1983/essh/main/docs/media/essh-spec-demo.gif)
-
-Recorded against eleven Debian containers over real SSH. One of them is
-deliberately switched off, which is why one row explains itself instead of
-showing numbers.
+The sections below describe the previous interface, available with `essh legacy`,
+and the existing command-line utilities. The default `essh` interface is the tmux
+workspace documented above.
 
 ## Install
 

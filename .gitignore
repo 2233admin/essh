@@ -8,3 +8,6 @@
 # One-off capture artifacts.
 /demo-divergence.gif
 /demo-divergence.tape
+
+# Generated terminal recordings and playback verification.
+/artifacts/demo/
