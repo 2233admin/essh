@@ -211,12 +211,13 @@ pub fn run(mut config: AppConfig, initial: View, popup: bool, new_session: bool)
                 }
             };
             f.render_widget(Paragraph::new(footer).style(Style::default().fg(palette::current().text_muted)).wrap(Wrap{trim:false}),rows[3]);
-            let actions:Vec<(&str,KeyCode)>=match view {
+            let mut actions:Vec<(&str,KeyCode)>=match view {
                 View::Hosts=>vec![("Connect",KeyCode::Enter),("Add",KeyCode::Char('a')),("Edit",KeyCode::Char('e')),("Quit essh",KeyCode::Char('q'))],
                 View::Sessions=>vec![("Switch",KeyCode::Enter),("New session",KeyCode::Char('n')),("Close session",KeyCode::Char('x')),("Back",KeyCode::Esc)],
                 View::Health=>vec![("Terminal",KeyCode::F(2)),("Side mode",KeyCode::Char('b')),("Reconnect",KeyCode::Char('r'))],
                 View::Help=>vec![("Back",KeyCode::Esc)],
             };
+            actions.push(("Themes",KeyCode::Char('t')));
             if rows[3].height>1 && !state.filtering && state.message.is_empty(){
                 let y=rows[3].bottom()-1;f.render_widget(Block::default().style(Style::default().bg(palette::current().bg)),Rect::new(rows[3].x,y,rows[3].width,1));
                 let mut x=rows[3].x;
@@ -299,6 +300,20 @@ pub fn run(mut config: AppConfig, initial: View, popup: bool, new_session: bool)
             continue;
         };
         state.message.clear();
+        if key == KeyCode::Char('t') && !state.filtering {
+            if let Some(name) = choose_theme(&mut screen)? {
+                let pane = if popup {
+                    None
+                } else {
+                    std::env::var("TMUX_PANE").ok()
+                };
+                apply_theme(&name, pane.as_deref())?;
+                config.theme = name;
+                state.message = format!("Theme saved: {}", config.theme);
+            }
+            screen.term.clear()?;
+            continue;
+        }
         if key == KeyCode::Char('h') && view == View::Hosts && !state.filtering {
             if !popup {
                 navigation::run("health")?;
@@ -983,7 +998,7 @@ fn draw_help(f: &mut Frame, r: Rect, s: &State) {
             b.description
         ));
     }
-    text.push_str("\nMOUSE\nClick session tabs to switch. Click navigation buttons for views.\nClick rows to select; double-click connects/switches.\nWheel scrolls; click panes to focus; drag dividers to resize.\nUse your terminal's selection override (Shift-drag in Ghostty) to select text.\n\nSESSIONS\nEnter connects or reconnects. F3 then n creates another session.\nF4 Main returns to hosts; q there quits essh and keeps jobs running.\nx in Sessions closes a remote session after explicit confirmation.\nSaved/disconnected does not guarantee remote jobs are alive.\n\nHEALTH\nF2 cycles terminal → strip → half → full → terminal.\nEsc closes full health and restores the previous side view.\nCtrl+A h opens full health directly.\nF5/F6 or session tabs change the session. Left/Right browses hosts.\nh on Hosts opens health for the selected host, including offline hosts.\nTab selects a panel; arrows/wheel scroll it. i cycles interfaces.\nc/m sorts processes by CPU/memory. b shows the side strip.\n— means unavailable; stale samples show their age.\nNetwork and disk rates are bytes/s; process CPU is ps lifetime average.\nCPU graphs: 0–100%; RTT: 0–50ms; traffic: max with 60% headroom.\n\nSPLITS ON THE REMOTE HOST\nCtrl+B, release, then % splits side by side; \" splits top/bottom.\nCtrl+B then arrow changes remote pane. Local Ctrl+A splits open local shells.\n\nADVANCED TMUX\nLocal prefix Ctrl+A; remote prefix Ctrl+B.\nCtrl+A then 1–9 session; s switcher; d main; q detach.\nCtrl+A, release, then lowercase m cycles strip / half / off.\nMode follows you between sessions. Ctrl+A h opens full health.\nCtrl+A then v sends the next key directly to the remote terminal,\nincluding reserved F1–F6. Ctrl+A twice sends a literal Ctrl+A.\nEsc and Ctrl+C in the terminal still go to your remote program.\n");
+    text.push_str("\nTHEMES\nt opens the theme picker in menus and health. Ctrl+A then t opens it from a shell.\nArrows preview; Enter or click applies and saves; Esc cancels. Shell colors stay native.\n\nMOUSE\nClick session tabs to switch. Click navigation buttons for views.\nClick rows to select; double-click connects/switches.\nWheel scrolls; click panes to focus; drag dividers to resize.\nUse your terminal's selection override (Shift-drag in Ghostty) to select text.\n\nSESSIONS\nEnter connects or reconnects. F3 then n creates another session.\nF4 Main returns to hosts; q there quits essh and keeps jobs running.\nx in Sessions closes a remote session after explicit confirmation.\nSaved/disconnected does not guarantee remote jobs are alive.\n\nHEALTH\nF2 cycles terminal → strip → half → full → terminal.\nEsc closes full health and restores the previous side view.\nCtrl+A h opens full health directly.\nF5/F6 or session tabs change the session. Left/Right browses hosts.\nh on Hosts opens health for the selected host, including offline hosts.\nTab selects a panel; arrows/wheel scroll it. i cycles interfaces.\nc/m sorts processes by CPU/memory. b shows the side strip.\n— means unavailable; stale samples show their age.\nNetwork and disk rates are bytes/s; process CPU is ps lifetime average.\nCPU graphs: 0–100%; RTT: 0–50ms; traffic: max with 60% headroom.\n\nSPLITS ON THE REMOTE HOST\nCtrl+B, release, then % splits side by side; \" splits top/bottom.\nCtrl+B then arrow changes remote pane. Local Ctrl+A splits open local shells.\n\nADVANCED TMUX\nLocal prefix Ctrl+A; remote prefix Ctrl+B.\nCtrl+A then 1–9 session; s switcher; d main; q detach.\nCtrl+A, release, then lowercase m cycles strip / half / off.\nMode follows you between sessions. Ctrl+A h opens full health.\nCtrl+A then v sends the next key directly to the remote terminal,\nincluding reserved F1–F6. Ctrl+A twice sends a literal Ctrl+A.\nEsc and Ctrl+C in the terminal still go to your remote program.\n");
     f.render_widget(
         Paragraph::new(text)
             .wrap(Wrap { trim: false })

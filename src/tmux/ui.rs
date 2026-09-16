@@ -541,6 +541,109 @@ pub(super) fn confirm_kill(w: &Window) -> Result<bool> {
     }
 }
 
+/// Popup picker used from a shell via Ctrl+A, t.
+pub fn themes() -> Result<()> {
+    let mut screen = Screen::new()?;
+    let selected = choose_theme(&mut screen)?;
+    drop(screen);
+    if let Some(name) = selected {
+        apply_theme(&name, None)?;
+    }
+    Ok(())
+}
+
+fn apply_theme(name: &str, skip_pane: Option<&str>) -> Result<()> {
+    let mut config = AppConfig::load()?;
+    config.theme = name.to_owned();
+    config.save()?;
+    palette::init(name);
+    configure()?;
+    refresh_views_except(skip_pane)
+}
+
+/// Preview changes are local to the picker until Enter/click applies them.
+fn choose_theme(screen: &mut Screen) -> Result<Option<String>> {
+    let original = palette::current().name;
+    let original = if original == "dark" {
+        "netwatch"
+    } else {
+        original
+    };
+    let names = &[
+        "terminal",
+        "netwatch",
+        "light",
+        "solarized",
+        "dracula",
+        "nord",
+        "ocean",
+        "sky",
+    ];
+    let mut selected = names.iter().position(|name| *name == original).unwrap_or(0);
+    loop {
+        let preview = crate::theme::by_name(names[selected]);
+        let mut hits = Vec::new();
+        screen.term.draw(|frame| {
+            let area = frame.area();
+            frame.render_widget(Block::default().style(Style::default().bg(preview.bg).fg(preview.text_primary)), area);
+            let rows = Layout::vertical([Constraint::Length(2), Constraint::Min(1), Constraint::Length(2)]).split(area);
+            frame.render_widget(Paragraph::new("Themes · ↑↓ preview · Enter apply · Esc cancel").style(Style::default().fg(preview.brand).bold()).wrap(Wrap { trim: false }), rows[0]);
+            let columns = Layout::horizontal([Constraint::Percentage(42), Constraint::Percentage(58)]).split(rows[1]);
+            for (index, name) in names.iter().enumerate() {
+                if index as u16 >= columns[0].height { break; }
+                let row = Rect::new(columns[0].x, columns[0].y + index as u16, columns[0].width, 1);
+                let text = format!("{} {}{}", if index == selected { "▸" } else { " " }, name, if *name == original { " (current)" } else { "" });
+                let style = if index == selected { Style::default().fg(preview.brand).bg(preview.selection_bg).bold() } else { Style::default().fg(preview.text_primary) };
+                frame.render_widget(Paragraph::new(text).style(style), row);
+                hits.push((row,index));
+            }
+            let description = match names[selected] {
+                "terminal" => "Your terminal's own background and ANSI palette.",
+                "netwatch" => "Netwatch · charcoal background, cyan headings and green meters.",
+                "light" => "Light background with dark text.",
+                _ => "A coordinated palette for menus and health dashboards.",
+            };
+            let content = vec![
+                Line::styled(description, Style::default().fg(preview.brand)),
+                Line::from(""),
+                Line::styled("CPU     ────────  42%", Style::default().fg(preview.status_good)),
+                Line::styled("Memory  ─────     28%", Style::default().fg(preview.status_info)),
+                Line::styled("Warning · sample text", Style::default().fg(preview.status_warn)),
+                Line::styled("Error · sample text", Style::default().fg(preview.status_error)),
+                Line::styled("Secondary text", Style::default().fg(preview.text_secondary)),
+                Line::styled("Muted text", Style::default().fg(preview.text_muted)),
+            ];
+            frame.render_widget(Paragraph::new(content).wrap(Wrap { trim:false }), columns[1]);
+            frame.render_widget(Paragraph::new("Preview uses sample values. Shell colors stay native.\nClick a theme to apply and save it.").style(Style::default().fg(preview.text_secondary)).wrap(Wrap { trim:false }), rows[2]);
+        })?;
+        if !event::poll(Duration::from_millis(150))? {
+            continue;
+        }
+        match event::read()? {
+            Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
+                KeyCode::Esc => return Ok(None),
+                KeyCode::Home => selected = 0,
+                KeyCode::End => selected = names.len() - 1,
+                KeyCode::Up => selected = (selected + names.len() - 1) % names.len(),
+                KeyCode::Down => selected = (selected + 1) % names.len(),
+                KeyCode::Enter => return Ok(Some(names[selected].to_owned())),
+                _ => (),
+            },
+            Event::Mouse(mouse)
+                if mouse.kind == event::MouseEventKind::Down(event::MouseButton::Left) =>
+            {
+                if let Some((_, index)) = hits
+                    .iter()
+                    .find(|(rect, _)| rect.contains(Position::new(mouse.column, mouse.row)))
+                {
+                    return Ok(Some(names[*index].to_owned()));
+                }
+            }
+            _ => (),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

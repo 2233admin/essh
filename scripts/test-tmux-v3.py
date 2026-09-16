@@ -20,6 +20,7 @@ import subprocess
 import tempfile
 import termios
 import time
+import tomllib
 
 BIN = Path(os.environ.get("ESSH_BIN", Path(__file__).resolve().parents[1] / "target/debug/essh"))
 
@@ -151,6 +152,29 @@ port=1
                     tmux('set-option', '-g', 'default-shell', '/bin/sh', remote=True)
                     tmux('set-option', '-g', 'default-command', 'exec /bin/sh', remote=True)
                 wait_for(lambda: "USER@ADDRESS" in view("essh:0"), "wide host layout")
+                config_before = (root / '.essh/config.toml').read_bytes()
+                os.write(master, b't')
+                wait_for(lambda: 'Themes ·' in view('essh:0'), 'theme picker opens from Hosts')
+                os.write(master, b'\x1b[B\x1b')
+                wait_for(lambda: 'Main menu' in view('essh:0'), 'theme preview cancels')
+                assert (root / '.essh/config.toml').read_bytes() == config_before
+                os.write(master, b't')
+                wait_for(lambda: 'Themes ·' in view('essh:0'), 'theme picker reopens')
+                # Click Netwatch (second row, below the two-row heading).
+                os.write(master, b'\x1b[<0;3;4M\x1b[<0;3;4m')
+                wait_for(lambda: tomllib.loads((root / '.essh/config.toml').read_text()).get('theme') == 'netwatch', 'mouse selection saves Netwatch')
+                wait_for(lambda: 'Main menu' in view('essh:0'), 'theme apply returns to Hosts')
+                assert '#' in tmux('show-options', '-gv', 'status-style')
+                # A helper without --theme must pick up the saved choice.
+                subprocess.run([str(BIN), 'tmux', 'refresh'], env=env, check=True)
+                wait_for(lambda: 'Main menu' in view('essh:0'), 'saved theme survives refresh')
+                assert 'netwatch' in tmux('display-message', '-p', '-t', 'essh:0', '#{pane_start_command}')
+                os.write(master, b't')
+                wait_for(lambda: 'Themes ·' in view('essh:0'), 'restore test theme')
+                os.write(master, b'\x1b[H' + (b'\x1b[B' * (2 if test_theme == 'light' else 0)) + b'\r')
+                wait_for(lambda: tomllib.loads((root / '.essh/config.toml').read_text()).get('theme') == test_theme, 'keyboard theme selection saves')
+                wait_for(lambda: 'Main menu' in view('essh:0'), 'Hosts after keyboard theme selection')
+
                 os.write(master, b"h")
                 wait_for(lambda: "Connect to a host" in transcript.decode(errors="replace"), "health without a session")
                 os.write(master, b"\x1b")
@@ -198,6 +222,11 @@ port=1
                 transcript.clear()
                 os.write(master,b"\x1bOQ")
                 wait_for(lambda: tmux("show-options","-gv","@essh_side_mode")=="1" and "RX" in view("essh:1.1") and len(tmux("list-panes","-t","essh:1").splitlines())==2,"F2 terminal to strip")
+                transcript.clear()
+                os.write(master,b'\x01t')
+                wait_for(lambda: 'Themes ·' in transcript.decode(errors='replace'), 'Ctrl+A t picker from shell')
+                os.write(master,b'\x1b')
+                drain(.3)
                 original_pid = tmux('display-message', '-p', '-t', 'essh:1.0', '#{pane_pid}')
                 alternate_theme = 'light' if test_theme == 'terminal' else 'terminal'
                 subprocess.run([str(BIN), '--theme', alternate_theme, 'tmux', 'refresh'], env=env, check=True)
@@ -211,6 +240,16 @@ port=1
                 transcript.clear()
                 os.write(master,b"\x1bOQ")
                 wait_for(lambda: "Health │" in transcript.decode(errors="replace"),"F2 half to full")
+                health_pid = tmux('display-message', '-p', '-t', 'essh:1.0', '#{pane_pid}')
+                for chosen_theme, steps in [('netwatch', 1), (test_theme, 2 if test_theme == 'light' else 0)]:
+                    transcript.clear()
+                    os.write(master,b't')
+                    wait_for(lambda: 'Themes ·' in transcript.decode(errors='replace'), 'theme picker inside full health')
+                    os.write(master,b'\x1b[H' + b'\x1b[B'*steps + b'\r')
+                    wait_for(lambda: tomllib.loads((root / '.essh/config.toml').read_text()).get('theme') == chosen_theme, 'full health applies and saves theme')
+                    wait_for(lambda: 'Health │' in transcript.decode(errors='replace'), 'theme apply returns to full health')
+                    assert tmux('display-message', '-p', '-t', 'essh:1.0', '#{pane_pid}') == health_pid
+
                 os.write(master,b"\x1bOQ")
                 wait_for(lambda: tmux("show-options","-gv","@essh_side_mode")=="0" and len(tmux("list-panes","-t","essh:1").splitlines())==1,"F2 full to terminal")
                 drain(.3)

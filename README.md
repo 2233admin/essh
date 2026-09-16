@@ -85,9 +85,18 @@ own foreground and background, even when you choose a different dashboard theme:
 
 ```sh
 essh --theme terminal
+essh --theme netwatch
 essh --theme light
-essh --theme dark
 ```
+
+Press **t** in menus or health views, or **Ctrl+A**, then **t** from a shell,
+to open the theme picker. Arrow keys preview each palette; **Enter** or a click
+applies and saves it. **Esc** cancels without changing your preference.
+
+Choose **Terminal**, **Netwatch**, **Light**, **Solarized**, **Dracula**,
+**Nord**, **Ocean**, or **Sky**. Netwatch uses a charcoal background with cyan
+headings and green meters. The selected theme applies across menus, health
+views and navigation bars; your shell retains its native colors.
 
 To save a preference, set `theme = "terminal"` (or another theme name) at the top
 of `~/.essh/config.toml`. Apply it to an open workspace with

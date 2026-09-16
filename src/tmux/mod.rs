@@ -32,6 +32,8 @@ pub enum Action {
     Navigate { command: String },
     #[command(hide = true)]
     View { view: navigation::View },
+    /// Choose and save the workspace theme
+    Themes,
     /// Host list (normally opened by the workspace)
     List {
         #[arg(long)]
@@ -121,6 +123,7 @@ pub fn run(action: Action, config: AppConfig) -> Result<()> {
         Action::List { new } => ui::hosts(config, new),
         Action::Switch => ui::switcher(),
         Action::Help => ui::help(),
+        Action::Themes => ui::themes(),
         Action::Open { host, new } => {
             let host = hosts(&config)
                 .into_iter()
@@ -358,7 +361,14 @@ fn start() -> Result<()> {
 
 // Restart only ESSH's own views when the theme changes, never SSH panes.
 fn refresh_views() -> Result<()> {
-    call(&["respawn-pane", "-k", "-t", "essh:0", &helper(&["list"])?])?;
+    refresh_views_except(None)
+}
+
+fn refresh_views_except(skip: Option<&str>) -> Result<()> {
+    let hosts_pane = call(&["display-message", "-p", "-t", "essh:0", "#{pane_id}"])?;
+    if skip != Some(hosts_pane.as_str()) {
+        call(&["respawn-pane", "-k", "-t", "essh:0", &helper(&["list"])?])?;
+    }
     for window in windows()? {
         let panes = call(&[
             "list-panes",
@@ -371,6 +381,9 @@ fn refresh_views() -> Result<()> {
             let Some((pane, "1")) = line.split_once('\t') else {
                 continue;
             };
+            if skip == Some(pane) {
+                continue;
+            }
             let mut args = vec!["strip", window.id.as_str()];
             if side_mode() == 2 {
                 args.push("--half");
@@ -444,7 +457,7 @@ fn configure() -> Result<()> {
     call(&["bind-key", "C-a", "send-prefix"])?;
     call(&["bind-key", "d", "select-window", "-t", "essh:0"])?;
     call(&["bind-key", "q", "detach-client"])?;
-    for (key, action) in [("s", "switch"), ("?", "help")] {
+    for (key, action) in [("s", "switch"), ("?", "help"), ("t", "themes")] {
         call(&[
             "bind-key",
             key,

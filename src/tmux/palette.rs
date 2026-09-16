@@ -1,16 +1,23 @@
 //! One theme shared by the workspace UI and its tmux chrome.
 use crate::theme::{self, Theme};
 use ratatui::style::Color;
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 
-static THEME: OnceLock<Theme> = OnceLock::new();
+static THEME: OnceLock<RwLock<Theme>> = OnceLock::new();
 
 pub fn init(name: &str) {
-    let _ = THEME.set(theme::by_name(name));
+    *THEME
+        .get_or_init(|| RwLock::new(theme::terminal()))
+        .write()
+        .unwrap() = theme::by_name(name);
 }
 
-pub fn current() -> &'static Theme {
-    THEME.get_or_init(theme::terminal)
+pub fn current() -> Theme {
+    THEME
+        .get_or_init(|| RwLock::new(theme::terminal()))
+        .read()
+        .unwrap()
+        .clone()
 }
 
 fn tmux_color(color: Color) -> String {
@@ -44,7 +51,7 @@ fn tmux_color(color: Color) -> String {
 
 // Translate the chrome's design roles, never shell content or host arguments.
 pub fn style(template: &str) -> String {
-    style_for(template, current())
+    style_for(template, &current())
 }
 
 fn style_for(template: &str, theme: &Theme) -> String {
@@ -66,6 +73,15 @@ fn style_for(template: &str, theme: &Theme) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn netwatch_has_a_persistent_name_and_the_design_palette() {
+        let netwatch = theme::by_name("netwatch");
+        assert_eq!(netwatch.name, "netwatch");
+        assert_eq!(netwatch.bg, theme::dark().bg);
+        assert_eq!(netwatch.brand, theme::dark().brand);
+        assert_eq!(netwatch.status_good, theme::dark().status_good);
+    }
 
     #[test]
     fn terminal_chrome_uses_default_background_and_ansi_palette() {

@@ -174,6 +174,11 @@ pub fn by_name(name: &str) -> Theme {
         // accept both rather than silently falling back to dark and looking
         // like the feature is missing.
         "terminal" | "system" | "ansi" => terminal(),
+        "netwatch" => {
+            let mut theme = dark();
+            theme.name = "netwatch";
+            theme
+        }
         "light" | "paper" => light(),
         "solarized" => solarized(),
         "dracula" => dracula(),
