@@ -1,4 +1,4 @@
-//! One theme shared by the workspace UI and its tmux chrome.
+//! One theme shared by the workspace UI, terminal defaults and tmux chrome.
 use crate::theme::{self, Theme};
 use ratatui::style::Color;
 use std::sync::{OnceLock, RwLock};
@@ -49,7 +49,7 @@ fn tmux_color(color: Color) -> String {
     }
 }
 
-// Translate the chrome's design roles, never shell content or host arguments.
+// Translate style roles, never shell content or host arguments.
 pub fn style(template: &str) -> String {
     style_for(template, &current())
 }
@@ -57,6 +57,8 @@ pub fn style(template: &str) -> String {
 fn style_for(template: &str, theme: &Theme) -> String {
     let mut result = template.to_owned();
     for (token, color) in [
+        ("$terminal", theme.terminal_bg),
+        ("$text", theme.text_primary),
         ("$footer", theme.footer_bg),
         ("$secondary", theme.text_secondary),
         ("$brand", theme.brand),
@@ -90,6 +92,20 @@ mod tests {
             "bg=default,fg=colour6"
         );
         assert_eq!(tmux_color(Color::Reset), "default");
+    }
+
+    #[test]
+    fn terminal_defaults_follow_the_selected_palette() {
+        for (name, expected) in [
+            ("terminal", "bg=default,fg=default"),
+            ("netwatch", "bg=#080f13,fg=#c8d4d9"),
+            ("light", "bg=#ffffff,fg=#1e1e1e"),
+        ] {
+            assert_eq!(
+                style_for("bg=$terminal,fg=$text", &theme::by_name(name)),
+                expected
+            );
+        }
     }
 
     #[test]

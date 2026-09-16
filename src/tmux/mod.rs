@@ -442,8 +442,8 @@ fn configure() -> Result<()> {
     for (key, val) in [
         ("automatic-rename", "off"), ("allow-rename", "off"),
         ("pane-border-style", &palette::style("fg=$border")), ("pane-active-border-style", &palette::style("fg=$border")),
-        ("window-style", "default"),
-        ("window-active-style", "default"),
+        ("window-style", &palette::style("bg=$terminal,fg=$text")),
+        ("window-active-style", &palette::style("bg=$terminal,fg=$text")),
         ("window-status-format", " #{?#{==:#I,0},hosts,#I #{@essh_host} #{@essh_dot}} "),
         ("window-status-current-format", &palette::style("#[bg=$selection,fg=$brand,bold] #{?#{==:#I,0},hosts,#I #{@essh_host} #{@essh_dot}} #[default]")),
     ] { call(&["set-window-option", "-g", key, val])?; }

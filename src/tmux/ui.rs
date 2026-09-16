@@ -601,7 +601,7 @@ fn choose_theme(screen: &mut Screen) -> Result<Option<String>> {
                 "terminal" => "Your terminal's own background and ANSI palette.",
                 "netwatch" => "Netwatch · charcoal background, cyan headings and green meters.",
                 "light" => "Light background with dark text.",
-                _ => "A coordinated palette for menus and health dashboards.",
+                _ => "A coordinated palette for menus, terminals and health.",
             };
             let content = vec![
                 Line::styled(description, Style::default().fg(preview.brand)),
@@ -614,7 +614,7 @@ fn choose_theme(screen: &mut Screen) -> Result<Option<String>> {
                 Line::styled("Muted text", Style::default().fg(preview.text_muted)),
             ];
             frame.render_widget(Paragraph::new(content).wrap(Wrap { trim:false }), columns[1]);
-            frame.render_widget(Paragraph::new("Preview uses sample values. Shell colors stay native.\nClick a theme to apply and save it.").style(Style::default().fg(preview.text_secondary)).wrap(Wrap { trim:false }), rows[2]);
+            frame.render_widget(Paragraph::new("Sample preview. Themes also color terminal panes.\nTerminal restores native colors. Click to apply and save.").style(Style::default().fg(preview.text_secondary)).wrap(Wrap { trim:false }), rows[2]);
         })?;
         if !event::poll(Duration::from_millis(150))? {
             continue;

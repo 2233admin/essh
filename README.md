@@ -80,8 +80,8 @@ normal startup files—zsh, bash, fish, or whichever shell that account uses.
 Your prompt, aliases and shell key bindings come from that remote account.
 Existing shells retain their running state when you reconnect.
 
-ESSH uses your terminal's colors by default. The shell always keeps the terminal's
-own foreground and background, even when you choose a different dashboard theme:
+ESSH uses your terminal's colors by default. Choose a theme to change the shell's
+foreground and background along with the dashboard:
 
 ```sh
 essh --theme terminal
@@ -96,7 +96,8 @@ applies and saves it. **Esc** cancels without changing your preference.
 Choose **Terminal**, **Netwatch**, **Light**, **Solarized**, **Dracula**,
 **Nord**, **Ocean**, or **Sky**. Netwatch uses a charcoal background with cyan
 headings and green meters. The selected theme applies across menus, health
-views and navigation bars; your shell retains its native colors.
+views, navigation bars and terminal panes. Choose **Terminal** to restore your
+terminal’s native colors. Programs and prompts can still set their own colors.
 
 To save a preference, set `theme = "terminal"` (or another theme name) at the top
 of `~/.essh/config.toml`. Apply it to an open workspace with

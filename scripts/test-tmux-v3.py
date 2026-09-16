@@ -129,6 +129,18 @@ port=1
         def view(target):
             return tmux("capture-pane", "-p", "-t", target, check=False)
 
+        def assert_terminal_theme(name):
+            expected = {
+                'terminal': 'bg=default,fg=default',
+                'netwatch': 'bg=#080f13,fg=#c8d4d9',
+                'light': 'bg=#ffffff,fg=#1e1e1e',
+            }[name]
+            for option in ('window-style', 'window-active-style'):
+                assert tmux('show-window-options', '-gv', option) == expected
+                for window in tmux('list-windows', '-t', 'essh', '-F', '#{window_id}').splitlines():
+                    actual = tmux('show-options', '-wAv', '-t', window, option)
+                    assert actual == expected, (window, option, actual, expected)
+
         def state(index):
             return tmux("show-window-options", "-v", "-t", f"essh:{index}", "@essh_state", check=False)
 
@@ -140,8 +152,7 @@ port=1
                 client = launch()
                 wait_for(lambda: "fixture" in view("essh:0"), "host list")
                 assert tmux("show-options", "-gv", "prefix") == "C-a"
-                assert tmux('show-window-options', '-gv', 'window-style') == 'default'
-                assert tmux('show-window-options', '-gv', 'window-active-style') == 'default'
+                assert_terminal_theme(test_theme)
                 style = tmux('show-options', '-gv', 'status-style')
                 assert ('#' not in style) if test_theme == 'terminal' else ('#' in style)
                 assert tmux('show-options', '-sv', 'extended-keys') == 'on'
@@ -165,10 +176,12 @@ port=1
                 wait_for(lambda: tomllib.loads((root / '.essh/config.toml').read_text()).get('theme') == 'netwatch', 'mouse selection saves Netwatch')
                 wait_for(lambda: 'Main menu' in view('essh:0'), 'theme apply returns to Hosts')
                 assert '#' in tmux('show-options', '-gv', 'status-style')
+                assert_terminal_theme('netwatch')
                 # A helper without --theme must pick up the saved choice.
                 subprocess.run([str(BIN), 'tmux', 'refresh'], env=env, check=True)
                 wait_for(lambda: 'Main menu' in view('essh:0'), 'saved theme survives refresh')
                 assert 'netwatch' in tmux('display-message', '-p', '-t', 'essh:0', '#{pane_start_command}')
+                assert_terminal_theme('netwatch')
                 os.write(master, b't')
                 wait_for(lambda: 'Themes ·' in view('essh:0'), 'restore test theme')
                 os.write(master, b'\x1b[H' + (b'\x1b[B' * (2 if test_theme == 'light' else 0)) + b'\r')
@@ -232,7 +245,7 @@ port=1
                 subprocess.run([str(BIN), '--theme', alternate_theme, 'tmux', 'refresh'], env=env, check=True)
                 wait_for(lambda: alternate_theme in tmux('display-message', '-p', '-t', 'essh:1.1', '#{pane_start_command}'), 'theme refresh reaches side view')
                 assert tmux('display-message', '-p', '-t', 'essh:1.0', '#{pane_pid}') == original_pid
-                assert tmux('show-window-options', '-gv', 'window-style') == 'default'
+                assert_terminal_theme(alternate_theme)
                 cli('refresh')
                 wait_for(lambda: 'RX' in view('essh:1.1'), 'health view after theme refresh')
                 os.write(master,b"\x1bOQ")
@@ -249,6 +262,7 @@ port=1
                     wait_for(lambda: tomllib.loads((root / '.essh/config.toml').read_text()).get('theme') == chosen_theme, 'full health applies and saves theme')
                     wait_for(lambda: 'Health │' in transcript.decode(errors='replace'), 'theme apply returns to full health')
                     assert tmux('display-message', '-p', '-t', 'essh:1.0', '#{pane_pid}') == health_pid
+                    assert_terminal_theme(chosen_theme)
 
                 os.write(master,b"\x1bOQ")
                 wait_for(lambda: tmux("show-options","-gv","@essh_side_mode")=="0" and len(tmux("list-panes","-t","essh:1").splitlines())==1,"F2 full to terminal")
