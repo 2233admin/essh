@@ -4,7 +4,7 @@ The tour records the real release binary in a 192-column × 46-row terminal agai
 an isolated, loopback-only SSH server. It uses ephemeral keys and separate local
 and remote tmux sockets. Existing ESSH sessions and SSH configuration are untouched.
 
-[Watch the verified demo](media/essh-demo.mp4).
+[Watch the verified demo](https://github.com/matthart1983/essh/releases/download/v0.4.1/essh-v3-demo.mp4).
 
 Connection and reconnect waits are shortened to 0.6 seconds. Command output and
 deliberate dashboard/help reading pauses retain their timing. The original cast
@@ -77,5 +77,5 @@ ffmpeg -y -i docs/media/essh-demo.mp4 -filter_complex \
   -loop 0 docs/media/essh-demo.gif
 ```
 
-The preview links to the full-resolution video in the repository. Both show the same
+The preview links to the full-resolution release video. Both show the same
 verified workflow, including the pauses on health and help screens.

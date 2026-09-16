@@ -8,9 +8,10 @@ ESSH uses OpenSSH for connections and tmux to keep your work alive.
 
 ## See it in action
 
-[![ESSH admin workflow: Linux commands, health dashboards and session switching](docs/media/essh-demo.gif)](docs/media/essh-demo.mp4)
+[![ESSH admin workflow: Linux commands, health dashboards and session switching](docs/media/essh-demo.gif)](https://github.com/matthart1983/essh/releases/download/v0.4.1/essh-v3-demo.mp4)
 
-**[Watch the 42-second demo](docs/media/essh-demo.mp4)**
+**[Watch the 42-second demo](https://github.com/matthart1983/essh/releases/download/v0.4.1/essh-v3-demo.mp4)** ·
+[Download the browser replay](https://github.com/matthart1983/essh/releases/download/v0.4.1/essh-v3-replay.html)
 
 Inspect disks with `df` and `lsblk`, find busy processes with `ps`, sample system
 activity with `vmstat`, and check sockets and interfaces with `ss` and `ip`.
