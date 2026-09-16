@@ -269,7 +269,11 @@ fn spawn_sampler(
             check.args(["-O", "check", "--", destination(&s)]);
             if capture(check, Duration::from_secs(2)).is_ok() {
                 let _ = option(&window, "@essh_state", "connected");
-                let _ = option(&window, "@essh_dot", "#[fg=#35d07f]●#[default]");
+                let _ = option(
+                    &window,
+                    "@essh_dot",
+                    &palette::style("#[fg=$good]●#[default]"),
+                );
                 let start = Instant::now();
                 let collect_slow =
                     dashboard && slow_at.is_none_or(|t| t.elapsed() > Duration::from_secs(3));
@@ -360,7 +364,11 @@ fn spawn_sampler(
                         }
                     }
                     let _ = option(&window, "@essh_state", "connected");
-                    let _ = option(&window, "@essh_dot", "#[fg=#35d07f]●#[default]");
+                    let _ = option(
+                        &window,
+                        "@essh_dot",
+                        &palette::style("#[fg=$good]●#[default]"),
+                    );
                 }
             }
             let delay = if visible { 10 } else { 50 };

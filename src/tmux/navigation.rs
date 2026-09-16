@@ -77,21 +77,21 @@ pub fn configure() -> Result<()> {
     call(&["set-option", "-g", "mouse", "on"])?;
     call(&["set-option", "-g", "status", "2"])?;
     call(&["set-option", "-g", "status-left-length", "20"])?;
-    call(&["set-option", "-g", "status-left", "#[fg=#4fd1c5,bold] essh #[default]#[range=user|health,fg=#4fd1c5] health #[norange,default]"])?;
+    call(&["set-option", "-g", "status-left", &palette::style("#[fg=$brand,bold] essh #[default]#[range=user|health,fg=$brand] health #[norange,default]")])?;
     let bar = |width| {
         BINDINGS
             .iter()
             .map(|b| format!("#[range=user|{}]{}#[norange]", b.command, label(b, width)))
             .collect::<String>()
     };
-    let bar = format!(
-        "#[fg=#4fd1c5]#{{?#{{e|<:#{{client_width}},76}},{},{}}}",
+    let bar = palette::style(&format!(
+        "#[fg=$brand]#{{?#{{e|<:#{{client_width}},76}},{},{}}}",
         bar(60),
         bar(120)
-    );
-    let bar = format!(
-        "#{{?#{{client_prefix}},#[fg=#4fd1c5]^A — waiting for key: 1–9 s n m h d x ? v,{bar}}}"
-    );
+    ));
+    let bar = palette::style(&format!(
+        "#{{?#{{client_prefix}},#[fg=$brand]^A — waiting for key: 1–9 s n m h d x ? v,{bar}}}"
+    ));
     call(&["set-option", "-g", "status-format[1]", &bar])?;
     for b in BINDINGS {
         let key = format!("F{}", b.number);

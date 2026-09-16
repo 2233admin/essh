@@ -75,6 +75,15 @@ name="offline"
 hostname="127.0.0.1"
 port=1
 """)
+        account_shell = pwd.getpwuid(os.getuid()).pw_shell
+        if Path(account_shell).name == 'zsh':
+            (root / '.zshrc').write_text('export ESSH_SHELL_RC=loaded\n')
+            sshd_config = root / 'sshd_config'
+            sshd_config.write_text(sshd_config.read_text().replace(
+                f'SetEnv TMUX_TMPDIR={root}/remote',
+                f'SetEnv TMUX_TMPDIR={root}/remote ZDOTDIR={root}'))
+        test_theme = os.environ.get('ESSH_TEST_THEME', 'terminal')
+        stale_shell = os.environ.get('ESSH_TEST_STALE_SHELL', '1') == '1'
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 32, 120, 0, 0))
         client = None
@@ -85,7 +94,7 @@ port=1
             fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 
         def launch():
-            return subprocess.Popen([str(BIN)], stdin=slave, stdout=slave, stderr=slave, env=env, preexec_fn=controlling_terminal)
+            return subprocess.Popen([str(BIN), "--theme", test_theme], stdin=slave, stdout=slave, stderr=slave, env=env, preexec_fn=controlling_terminal)
 
         def drain(seconds=0.1):
             deadline = time.monotonic() + seconds
@@ -104,7 +113,7 @@ port=1
             return result.stdout.strip()
 
         def cli(*args):
-            result = subprocess.run([str(BIN), "tmux", *args], env=env, capture_output=True, text=True)
+            result = subprocess.run([str(BIN), "--theme", test_theme, "tmux", *args], env=env, capture_output=True, text=True)
             assert result.returncode == 0, result.stderr
             return result.stdout
 
@@ -130,6 +139,17 @@ port=1
                 client = launch()
                 wait_for(lambda: "fixture" in view("essh:0"), "host list")
                 assert tmux("show-options", "-gv", "prefix") == "C-a"
+                assert tmux('show-window-options', '-gv', 'window-style') == 'default'
+                assert tmux('show-window-options', '-gv', 'window-active-style') == 'default'
+                style = tmux('show-options', '-gv', 'status-style')
+                assert ('#' not in style) if test_theme == 'terminal' else ('#' in style)
+                assert tmux('show-options', '-sv', 'extended-keys') == 'on'
+                # Simulate a stale remote server whose default shell/command
+                # differs from this account. ESSH must honor the account shell.
+                if stale_shell:
+                    tmux('new-session', '-d', '-s', 'bootstrap', remote=True)
+                    tmux('set-option', '-g', 'default-shell', '/bin/sh', remote=True)
+                    tmux('set-option', '-g', 'default-command', 'exec /bin/sh', remote=True)
                 wait_for(lambda: "USER@ADDRESS" in view("essh:0"), "wide host layout")
                 os.write(master, b"h")
                 wait_for(lambda: "Connect to a host" in transcript.decode(errors="replace"), "health without a session")
@@ -154,6 +174,13 @@ port=1
                 wait_for(lambda: "Main menu" in view("essh:0"), "Escape cancels edit form")
                 cli("open", "fixture")
                 wait_for(lambda: state(1) == "connected", "SSH connection")
+                assert tmux('show-options', '-gv', 'default-shell', remote=True) == account_shell
+                assert tmux('show-options', '-gv', 'default-command', remote=True) == ''
+                if stale_shell:
+                    tmux('kill-session', '-t', '=bootstrap', remote=True)
+                if Path(account_shell).name == 'zsh':
+                    tmux('send-keys', '-t', 'essh:1', 'echo SHELL_RC_$ESSH_SHELL_RC', 'Enter')
+                    wait_for(lambda: 'SHELL_RC_loaded' in view('essh:1'), 'user shell startup file loaded')
                 tmux("send-keys", "-t", "essh:1", "export ESSH_PERSIST_MARKER=works", "Enter")
                 drain(0.3)
                 first = tmux("show-window-options", "-v", "-t", "essh:1", "@essh_id")
@@ -171,6 +198,14 @@ port=1
                 transcript.clear()
                 os.write(master,b"\x1bOQ")
                 wait_for(lambda: tmux("show-options","-gv","@essh_side_mode")=="1" and "RX" in view("essh:1.1") and len(tmux("list-panes","-t","essh:1").splitlines())==2,"F2 terminal to strip")
+                original_pid = tmux('display-message', '-p', '-t', 'essh:1.0', '#{pane_pid}')
+                alternate_theme = 'light' if test_theme == 'terminal' else 'terminal'
+                subprocess.run([str(BIN), '--theme', alternate_theme, 'tmux', 'refresh'], env=env, check=True)
+                wait_for(lambda: alternate_theme in tmux('display-message', '-p', '-t', 'essh:1.1', '#{pane_start_command}'), 'theme refresh reaches side view')
+                assert tmux('display-message', '-p', '-t', 'essh:1.0', '#{pane_pid}') == original_pid
+                assert tmux('show-window-options', '-gv', 'window-style') == 'default'
+                cli('refresh')
+                wait_for(lambda: 'RX' in view('essh:1.1'), 'health view after theme refresh')
                 os.write(master,b"\x1bOQ")
                 wait_for(lambda: tmux("show-options","-gv","@essh_side_mode")=="2" and "CPU" in view("essh:1.1"),"F2 strip to half")
                 transcript.clear()

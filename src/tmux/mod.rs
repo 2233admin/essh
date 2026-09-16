@@ -2,6 +2,7 @@
 mod details;
 mod metrics;
 mod navigation;
+mod palette;
 mod ui;
 
 use crate::config::AppConfig;
@@ -101,6 +102,7 @@ pub struct Window {
 }
 
 pub fn run(action: Action, config: AppConfig) -> Result<()> {
+    palette::init(&config.theme);
     match action {
         Action::Start => start(),
         Action::Refresh => {
@@ -110,7 +112,7 @@ pub fn run(action: Action, config: AppConfig) -> Result<()> {
                 record.index = w.index.parse().ok();
                 fs::write(session_path(&record.id)?, serde_json::to_vec(&record)?)?;
             }
-            call(&["respawn-pane", "-k", "-t", "essh:0", &helper(&["list"])?])?;
+            refresh_views()?;
             Ok(())
         }
         Action::HealthSample { id, window, token } => metrics::health_worker(&id, &window, &token),
@@ -270,7 +272,11 @@ pub fn quote(s: &str) -> String {
 fn helper(args: &[&str]) -> Result<String> {
     let exe = std::env::current_exe()?;
     Ok(std::iter::once(quote(&exe.to_string_lossy()))
-        .chain(std::iter::once("tmux".into()))
+        .chain([
+            "--theme".into(),
+            quote(palette::current().name),
+            "tmux".into(),
+        ])
         .chain(args.iter().map(|s| quote(s)))
         .collect::<Vec<_>>()
         .join(" "))
@@ -304,7 +310,8 @@ fn start() -> Result<()> {
         .arg("-V")
         .output()
         .context("OpenSSH is required")?;
-    if call(&["has-session", "-t", "=essh"]).is_err() {
+    let existing = call(&["has-session", "-t", "=essh"]).is_ok();
+    if !existing {
         call(&[
             "new-session",
             "-d",
@@ -316,6 +323,9 @@ fn start() -> Result<()> {
         ])?;
     }
     configure()?;
+    if existing {
+        refresh_views()?;
+    }
     // Local reboot or server loss must not lose the remote session identities.
     let live = windows()?;
     let mut records = Vec::new();
@@ -346,15 +356,68 @@ fn start() -> Result<()> {
     Ok(())
 }
 
+// Restart only ESSH's own views when the theme changes, never SSH panes.
+fn refresh_views() -> Result<()> {
+    call(&["respawn-pane", "-k", "-t", "essh:0", &helper(&["list"])?])?;
+    for window in windows()? {
+        let panes = call(&[
+            "list-panes",
+            "-t",
+            &window.target,
+            "-F",
+            "#{pane_id}\t#{@essh_strip}",
+        ])?;
+        for line in panes.lines() {
+            let Some((pane, "1")) = line.split_once('\t') else {
+                continue;
+            };
+            let mut args = vec!["strip", window.id.as_str()];
+            if side_mode() == 2 {
+                args.push("--half");
+            }
+            call(&["respawn-pane", "-k", "-t", pane, &helper(&args)?])?;
+        }
+    }
+    Ok(())
+}
+
 fn configure() -> Result<()> {
+    if matches!(
+        std::env::var("COLORTERM").as_deref(),
+        Ok("truecolor" | "24bit")
+    ) {
+        if let Ok(term) = std::env::var("TERM") {
+            if term
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+            {
+                let feature = format!("{term}:RGB");
+                let existing = call(&["show-options", "-sv", "terminal-features"])?;
+                if !existing.contains(&feature) {
+                    call(&[
+                        "set-option",
+                        "-as",
+                        "terminal-features",
+                        &format!(",{feature}"),
+                    ])?;
+                }
+            }
+        }
+    }
     for (key, val) in [
         ("prefix", "C-a"),
-        ("status-style", "bg=#0d1316,fg=#8b9aa6"),
-        ("status-left", "#[fg=#4fd1c5,bold] essh #[default]"),
+        ("status-style", &palette::style("bg=$footer,fg=$secondary")),
+        (
+            "status-left",
+            &palette::style("#[fg=$brand,bold] essh #[default]"),
+        ),
         ("status-left-length", "8"),
         ("status-right-length", "40"),
         ("status-interval", "5"),
-        ("escape-time", "50"),
+        ("escape-time", "10"),
+        ("extended-keys", "on"),
+        ("focus-events", "on"),
+        ("set-clipboard", "on"),
         ("base-index", "0"),
         ("renumber-windows", "off"),
         ("mouse", "off"),
@@ -365,10 +428,11 @@ fn configure() -> Result<()> {
     }
     for (key, val) in [
         ("automatic-rename", "off"), ("allow-rename", "off"),
-        ("pane-border-style", "fg=#1c2429"), ("pane-active-border-style", "fg=#1c2429"),
-        ("window-style", "bg=#080b0d,fg=#cbd5dd"),
+        ("pane-border-style", &palette::style("fg=$border")), ("pane-active-border-style", &palette::style("fg=$border")),
+        ("window-style", "default"),
+        ("window-active-style", "default"),
         ("window-status-format", " #{?#{==:#I,0},hosts,#I #{@essh_host} #{@essh_dot}} "),
-        ("window-status-current-format", "#[bg=#10171b,fg=#4fd1c5,bold] #{?#{==:#I,0},hosts,#I #{@essh_host} #{@essh_dot}} #[default]"),
+        ("window-status-current-format", &palette::style("#[bg=$selection,fg=$brand,bold] #{?#{==:#I,0},hosts,#I #{@essh_host} #{@essh_dot}} #[default]")),
     ] { call(&["set-window-option", "-g", key, val])?; }
     call(&[
         "set-option",
@@ -393,7 +457,7 @@ fn configure() -> Result<()> {
             "-b",
             "single",
             "-S",
-            "fg=#4fd1c5",
+            &palette::style("fg=$brand"),
             &helper(&[action])?,
         ])?;
     }
@@ -409,7 +473,7 @@ fn configure() -> Result<()> {
         "-b",
         "single",
         "-S",
-        "fg=#4fd1c5",
+        &palette::style("fg=$brand"),
         &helper(&["list", "--new"])?,
     ])?;
     call(&[
@@ -619,9 +683,22 @@ fn destination(s: &SavedSession) -> &str {
     }
 }
 fn remote_attach(id: &str) -> String {
-    // Session names are generated hex, never host-supplied shell text. -L isolates
-    // the app from the user's usual remote tmux server and configuration.
-    format!("command -v tmux >/dev/null || {{ echo 'essh requires tmux on this host'; exit 127; }}; tmux -L essh -f /dev/null new-session -Ad -s essh-{id} && tmux -L essh set-option -t '=essh-{id}:' status off && exec tmux -L essh attach-session -t '=essh-{id}'")
+    // SSH invokes the account's shell to run this bootstrap. Use POSIX sh only
+    // for setup; tmux launches the account's actual shell as an interactive
+    // login shell (empty default-command), including its normal startup files.
+    let script = format!(
+        r#"command -v tmux >/dev/null || {{ echo 'essh requires tmux on this host'; exit 127; }}
+essh_login_shell=$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f7)
+if [ -z "$essh_login_shell" ] && command -v dscl >/dev/null; then
+    essh_login_shell=$(dscl . -read "/Users/$(id -un)" UserShell 2>/dev/null | awk '{{print $2}}')
+fi
+[ -n "$essh_login_shell" ] || essh_login_shell=$SHELL
+[ -n "$essh_login_shell" ] && [ -x "$essh_login_shell" ] || {{ echo 'Cannot resolve your login shell'; exit 127; }}
+tmux -L essh -f /dev/null start-server \; set-option -g default-shell "$essh_login_shell" \; set-option -g default-command '' \; set-option -g default-terminal tmux-256color \; new-session -Ad -s essh-{id} &&
+tmux -L essh set-option -t '=essh-{id}:' status off &&
+exec tmux -L essh attach-session -t '=essh-{id}'"#
+    );
+    format!("sh -c {}", quote(&script))
 }
 fn attach(id: &str, wait: bool) -> Result<()> {
     let s = saved(id)?;
@@ -670,7 +747,11 @@ fn attach(id: &str, wait: bool) -> Result<()> {
             "@essh_state",
             "disconnected · remote state unknown",
         )?;
-        option(&window, "@essh_dot", "#[fg=#ef5f52]●#[default]")?;
+        option(
+            &window,
+            "@essh_dot",
+            &palette::style("#[fg=$error]●#[default]"),
+        )?;
         println!("\r\n{} disconnected ({:?}). Remote session state is unverified.\r\nr or Enter reconnects; q returns to hosts. Reconnecting recreates the shell if it has ended.", s.host.name, result?);
         loop {
             if ui::reconnect_key()? {

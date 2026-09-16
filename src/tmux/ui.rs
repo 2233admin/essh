@@ -14,14 +14,6 @@ use std::{
     net::{TcpStream, ToSocketAddrs},
 };
 
-const BG: Color = Color::Rgb(8, 11, 13);
-const TEXT: Color = Color::Rgb(203, 213, 221);
-const DIM: Color = Color::Rgb(91, 107, 122);
-const CYAN: Color = Color::Rgb(79, 209, 197);
-const GREEN: Color = Color::Rgb(53, 208, 127);
-const RED: Color = Color::Rgb(239, 95, 82);
-const SELECTED: Color = Color::Rgb(16, 23, 27);
-
 type Term = Terminal<CrosstermBackend<io::Stdout>>;
 struct Screen {
     term: Term,
@@ -64,7 +56,11 @@ fn key() -> Result<Option<KeyCode>> {
 }
 fn background(f: &mut Frame) {
     f.render_widget(
-        Block::default().style(Style::default().bg(BG).fg(TEXT)),
+        Block::default().style(
+            Style::default()
+                .bg(palette::current().bg)
+                .fg(palette::current().text_primary),
+        ),
         f.area(),
     );
 }
@@ -81,17 +77,27 @@ enum GraphScale {
     Latency,
 }
 // Thin horizontal strokes leave space above and below the meter, unlike
-// full-cell gauges. The track uses the reference's exact #14191d color.
+// full-cell gauges. Fill and track follow the selected theme.
 fn thin_meter(value: Option<f64>, width: u16) -> Line<'static> {
     let Some(value) = value.filter(|v| v.is_finite()) else {
-        return Line::styled("— usage unavailable", Style::default().fg(DIM));
+        return Line::styled(
+            "— usage unavailable",
+            Style::default().fg(palette::current().text_muted),
+        );
     };
     let used = (value.clamp(0.0, 100.0) / 100.0 * f64::from(width)).round() as usize;
     Line::from(vec![
-        Span::styled("─".repeat(used), Style::default().fg(GREEN).bg(BG)),
+        Span::styled(
+            "─".repeat(used),
+            Style::default()
+                .fg(palette::current().status_good)
+                .bg(palette::current().bg),
+        ),
         Span::styled(
             "─".repeat(usize::from(width).saturating_sub(used)),
-            Style::default().fg(Color::Rgb(20, 25, 29)).bg(BG),
+            Style::default()
+                .fg(palette::current().meter_track)
+                .bg(palette::current().bg),
         ),
     ])
 }
@@ -194,7 +200,7 @@ fn host_form(config: &mut AppConfig, original: Option<&Host>) -> Result<Option<S
             };
             let block = Block::bordered()
                 .title(title)
-                .border_style(Style::default().fg(CYAN));
+                .border_style(Style::default().fg(palette::current().brand));
             let inner = block.inner(popup);
             f.render_widget(block, popup);
             let rows = Layout::vertical([
@@ -211,7 +217,11 @@ fn host_form(config: &mut AppConfig, original: Option<&Host>) -> Result<Option<S
                 fields.push(rows[i]);
                 let block = Block::bordered()
                     .title(labels[i])
-                    .border_style(Style::default().fg(if i == field { CYAN } else { DIM }));
+                    .border_style(Style::default().fg(if i == field {
+                        palette::current().brand
+                    } else {
+                        palette::current().text_muted
+                    }));
                 let inside = block.inner(rows[i]);
                 let limit = usize::from(inside.width.saturating_sub(1));
                 let chars: Vec<_> = values[i].chars().collect();
@@ -222,7 +232,7 @@ fn host_form(config: &mut AppConfig, original: Option<&Host>) -> Result<Option<S
                 f.render_widget(
                     Paragraph::new(visible.clone())
                         .block(block)
-                        .style(Style::default().fg(TEXT)),
+                        .style(Style::default().fg(palette::current().text_primary)),
                     rows[i],
                 );
                 if i == field && inside.width > 0 && inside.height > 0 {
@@ -242,13 +252,13 @@ fn host_form(config: &mut AppConfig, original: Option<&Host>) -> Result<Option<S
                 } else {
                     "Host reachability is checked after saving".into()
                 },
-                DIM,
+                palette::current().text_muted,
             );
             line(
                 f,
                 rows[5],
                 "Tab/click field · Enter save · Esc/F4 cancel · F1 help",
-                DIM,
+                palette::current().text_muted,
             );
         })?;
         if !event::poll(Duration::from_millis(150))? {
@@ -357,7 +367,12 @@ pub fn strip(id: &str) -> Result<()> {
         screen.term.draw(|f| {
             background(f);
             if f.area().width < 26 {
-                line(f, f.area(), "Resize · ^A m hide", DIM);
+                line(
+                    f,
+                    f.area(),
+                    "Resize · ^A m hide",
+                    palette::current().text_muted,
+                );
                 return;
             }
             let inner = f.area().inner(Margin::new(1, 1));
@@ -373,7 +388,12 @@ pub fn strip(id: &str) -> Result<()> {
                 Constraint::Length(1),
             ])
             .split(inner);
-            line(f, r[0], format!("{}  · all interfaces", s.host.name), CYAN);
+            line(
+                f,
+                r[0],
+                format!("{}  · all interfaces", s.host.name),
+                palette::current().brand,
+            );
             if let Some(m) = &m {
                 f.render_widget(
                     Paragraph::new(format!(
@@ -381,7 +401,7 @@ pub fn strip(id: &str) -> Result<()> {
                         metrics::rate(m.rx),
                         spark(&m.rx_history, 27)
                     ))
-                    .style(Style::default().fg(GREEN)),
+                    .style(Style::default().fg(palette::current().status_good)),
                     r[1],
                 );
                 f.render_widget(
@@ -390,7 +410,7 @@ pub fn strip(id: &str) -> Result<()> {
                         metrics::rate(m.tx),
                         spark(&m.tx_history, 27)
                     ))
-                    .style(Style::default().fg(CYAN)),
+                    .style(Style::default().fg(palette::current().brand)),
                     r[2],
                 );
                 for (area, name, value) in [
@@ -402,16 +422,16 @@ pub fn strip(id: &str) -> Result<()> {
                         Some(v) => {
                             let mut spans = vec![Span::styled(
                                 format!("{name:<5} "),
-                                Style::default().fg(DIM),
+                                Style::default().fg(palette::current().text_muted),
                             )];
                             spans.extend(thin_meter(Some(v), area.width.saturating_sub(12)).spans);
                             spans.push(Span::styled(
                                 format!(" {v:>4.0}%"),
-                                Style::default().fg(TEXT),
+                                Style::default().fg(palette::current().text_primary),
                             ));
-                            line(f, area, Line::from(spans), TEXT);
+                            line(f, area, Line::from(spans), palette::current().text_primary);
                         }
-                        None => line(f, area, format!("{name} —"), DIM),
+                        None => line(f, area, format!("{name} —"), palette::current().text_muted),
                     }
                 }
                 line(
@@ -424,7 +444,7 @@ pub fn strip(id: &str) -> Result<()> {
                             .map(|r| format!("{r:.0}ms"))
                             .unwrap_or_else(|| "—".into())
                     ),
-                    DIM,
+                    palette::current().text_muted,
                 );
                 let rows = m.peers.iter().map(|(p, rx, tx)| {
                     Row::new([
@@ -442,12 +462,15 @@ pub fn strip(id: &str) -> Result<()> {
                             Constraint::Length(6),
                         ],
                     )
-                    .header(Row::new(["PEER", "RX/s", "TX/s"]).style(Style::default().fg(DIM)))
+                    .header(
+                        Row::new(["PEER", "RX/s", "TX/s"])
+                            .style(Style::default().fg(palette::current().text_muted)),
+                    )
                     .column_spacing(1)
                     .block(
                         Block::default()
                             .borders(Borders::TOP)
-                            .border_style(Style::default().fg(DIM)),
+                            .border_style(Style::default().fg(palette::current().text_muted)),
                     ),
                     r[7],
                 );
@@ -456,7 +479,7 @@ pub fn strip(id: &str) -> Result<()> {
                         f,
                         Rect::new(r[7].x, r[7].y + 2, r[7].width, 1),
                         "No peer counters available",
-                        DIM,
+                        palette::current().text_muted,
                     );
                 }
             } else {
@@ -468,10 +491,15 @@ pub fn strip(id: &str) -> Result<()> {
                     } else {
                         "Metrics unavailable"
                     },
-                    DIM,
+                    palette::current().text_muted,
                 );
             }
-            line(f, r[8], "F2 half · ^A h full", DIM);
+            line(
+                f,
+                r[8],
+                "F2 half · ^A h full",
+                palette::current().text_muted,
+            );
         })?;
         let _ = key()?;
     }
@@ -501,9 +529,9 @@ pub(super) fn confirm_kill(w: &Window) -> Result<bool> {
         screen.term.draw(|f| {
             background(f);let a=f.area();let width=a.width.min(64);let height=a.height.min(9);
             let r=Rect::new(a.x+(a.width-width)/2,a.y+(a.height-height)/2,width,height);
-            let block=Block::bordered().title(format!(" Kill session {} on {}? ",w.index,w.host)).border_style(Style::default().fg(RED));
+            let block=Block::bordered().title(format!(" Kill session {} on {}? ",w.index,w.host)).border_style(Style::default().fg(palette::current().status_error));
             let text=format!("{command} will be terminated.\nReturn to Hosts (F4) to keep it running.\n\ny Yes, kill · n / Esc Cancel");
-            f.render_widget(Paragraph::new(text).block(block).wrap(Wrap{trim:false}).style(Style::default().fg(TEXT)),r);
+            f.render_widget(Paragraph::new(text).block(block).wrap(Wrap{trim:false}).style(Style::default().fg(palette::current().text_primary)),r);
         })?;
         match key()? {
             Some(KeyCode::Char('y')) => return Ok(true),

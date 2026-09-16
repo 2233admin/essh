@@ -192,7 +192,7 @@ pub fn run(mut config: AppConfig, initial: View, popup: bool, new_session: bool)
                     if let Some(h)=&health_host {format!("Health │ {} · {}@{} · {} tmux · {} · ←→ host",h.name,h.user.as_deref().unwrap_or("—"),h.hostname,ws.iter().filter(|w|w.host==h.name).count(),session.as_ref().map(|w|w.state.as_str()).unwrap_or("not connected"))}else{"Health │ No configured hosts".into()}
                 }
             };
-            line(f,rows[1],title,CYAN);
+            line(f,rows[1],title,palette::current().brand);
             match view {
                 View::Hosts=>draw_hosts(f,rows[2],&shown,&ws,&probes,&mut state),
                 View::Sessions=>draw_sessions(f,rows[2],&filtered,&mut state),
@@ -210,7 +210,7 @@ pub fn run(mut config: AppConfig, initial: View, popup: bool, new_session: bool)
                     View::Health=>"←→ Host · Enter Connect · r Reconnect · Tab Panel · ↑↓ Scroll · i Interface · b Side mode · Esc Back".into(),
                 }
             };
-            f.render_widget(Paragraph::new(footer).style(Style::default().fg(DIM)).wrap(Wrap{trim:false}),rows[3]);
+            f.render_widget(Paragraph::new(footer).style(Style::default().fg(palette::current().text_muted)).wrap(Wrap{trim:false}),rows[3]);
             let actions:Vec<(&str,KeyCode)>=match view {
                 View::Hosts=>vec![("Connect",KeyCode::Enter),("Add",KeyCode::Char('a')),("Edit",KeyCode::Char('e')),("Quit essh",KeyCode::Char('q'))],
                 View::Sessions=>vec![("Switch",KeyCode::Enter),("New session",KeyCode::Char('n')),("Close session",KeyCode::Char('x')),("Back",KeyCode::Esc)],
@@ -218,15 +218,15 @@ pub fn run(mut config: AppConfig, initial: View, popup: bool, new_session: bool)
                 View::Help=>vec![("Back",KeyCode::Esc)],
             };
             if rows[3].height>1 && !state.filtering && state.message.is_empty(){
-                let y=rows[3].bottom()-1;f.render_widget(Block::default().style(Style::default().bg(BG)),Rect::new(rows[3].x,y,rows[3].width,1));
+                let y=rows[3].bottom()-1;f.render_widget(Block::default().style(Style::default().bg(palette::current().bg)),Rect::new(rows[3].x,y,rows[3].width,1));
                 let mut x=rows[3].x;
-                for (label,key) in actions {let text=format!(" [{label}] ");let width=text.len() as u16;if x+width>rows[3].right(){break;}let r=Rect::new(x,y,width,1);line(f,r,text,CYAN);state.hits.push((r,Click::Key(key)));x+=width;}
+                for (label,key) in actions {let text=format!(" [{label}] ");let width=text.len() as u16;if x+width>rows[3].right(){break;}let r=Rect::new(x,y,width,1);line(f,r,text,palette::current().brand);state.hits.push((r,Click::Key(key)));x+=width;}
             }
             if !state.message.is_empty() && f.area().height>=5 {
                 let width=(state.message.chars().count() as u16+4).min(f.area().width);
                 let r=Rect::new(f.area().right()-width,f.area().y,width,3);
-                let block=Block::bordered().border_style(Style::default().fg(DIM)).style(Style::default().bg(BG));
-                f.render_widget(Paragraph::new(state.message.clone()).block(block).style(Style::default().fg(TEXT)),r);
+                let block=Block::bordered().border_style(Style::default().fg(palette::current().text_muted)).style(Style::default().bg(palette::current().bg));
+                f.render_widget(Paragraph::new(state.message.clone()).block(block).style(Style::default().fg(palette::current().text_primary)),r);
             }
         })?;
         if !event::poll(Duration::from_millis(150))? {
@@ -652,11 +652,11 @@ fn draw_nav(f: &mut Frame, area: Rect, ws: &[Window], s: &mut State) {
         }
         let rect = Rect::new(x, area.y, width, 1);
         f.render_widget(
-            Paragraph::new(label).style(Style::default().fg(CYAN).bg(
+            Paragraph::new(label).style(Style::default().fg(palette::current().brand).bg(
                 if s.nav_focus == Some(b.number as usize - 1) {
-                    SELECTED
+                    palette::current().selection_bg
                 } else {
-                    BG
+                    palette::current().bg
                 },
             )),
             rect,
@@ -675,8 +675,16 @@ fn draw_nav(f: &mut Frame, area: Rect, ws: &[Window], s: &mut State) {
         f.render_widget(
             Paragraph::new(label).style(
                 Style::default()
-                    .fg(if active { BG } else { DIM })
-                    .bg(if active { CYAN } else { BG }),
+                    .fg(if active {
+                        palette::current().bg
+                    } else {
+                        palette::current().text_muted
+                    })
+                    .bg(if active {
+                        palette::current().brand
+                    } else {
+                        palette::current().bg
+                    }),
             ),
             r,
         );
@@ -688,7 +696,7 @@ fn draw_nav(f: &mut Frame, area: Rect, ws: &[Window], s: &mut State) {
         let width = (label.chars().count() as u16).min(24);
         if x + width + 12 > area.right() {
             let r = Rect::new(x, area.y + 1, area.right().saturating_sub(x), 1);
-            line(f, r, "… F3 Sessions", CYAN);
+            line(f, r, "… F3 Sessions", palette::current().brand);
             s.hits.push((r, Click::Key(KeyCode::F(3))));
             break;
         }
@@ -699,19 +707,27 @@ fn draw_nav(f: &mut Frame, area: Rect, ws: &[Window], s: &mut State) {
                 Span::styled(
                     "●",
                     Style::default().fg(if w.state == "connected" {
-                        GREEN
+                        palette::current().status_good
                     } else if w.state.starts_with("disconnected") {
-                        RED
+                        palette::current().status_error
                     } else {
-                        DIM
+                        palette::current().text_muted
                     }),
                 ),
                 Span::raw(" "),
             ]))
             .style(
                 Style::default()
-                    .fg(if w.active { CYAN } else { DIM })
-                    .bg(if w.active { SELECTED } else { BG }),
+                    .fg(if w.active {
+                        palette::current().brand
+                    } else {
+                        palette::current().text_muted
+                    })
+                    .bg(if w.active {
+                        palette::current().selection_bg
+                    } else {
+                        palette::current().bg
+                    }),
             ),
             r,
         );
@@ -768,7 +784,7 @@ fn draw_unavailable(
     f.render_widget(
         Paragraph::new(text)
             .alignment(Alignment::Center)
-            .style(Style::default().fg(DIM)),
+            .style(Style::default().fg(palette::current().text_muted)),
         content,
     );
 }
@@ -856,11 +872,11 @@ fn draw_hosts(
         };
         cells.push(last);
         Row::new(cells).style(Style::default().fg(if connected {
-            GREEN
+            palette::current().status_good
         } else if !sessions.is_empty() && latency.is_none() {
-            RED
+            palette::current().status_error
         } else {
-            TEXT
+            palette::current().text_primary
         }))
     });
     let (mut headers, mut widths) = (vec!["HOST"], vec![Constraint::Length(18)]);
@@ -879,11 +895,14 @@ fn draw_hosts(
             .header(
                 Row::new(headers)
                     .bottom_margin(1)
-                    .style(Style::default().fg(DIM)),
+                    .style(Style::default().fg(palette::current().text_muted)),
             )
             .column_spacing(2)
-            .highlight_symbol(Span::styled("▌", Style::default().fg(CYAN)))
-            .row_highlight_style(Style::default().bg(SELECTED).bold()),
+            .highlight_symbol(Span::styled(
+                "▌",
+                Style::default().fg(palette::current().brand),
+            ))
+            .row_highlight_style(Style::default().bg(palette::current().selection_bg).bold()),
         r,
         &mut s.table,
     );
@@ -897,7 +916,7 @@ fn draw_hosts(
             } else {
                 format!("no hosts match \"{}\"", s.query)
             },
-            DIM,
+            palette::current().text_muted,
         );
     }
 }
@@ -935,7 +954,11 @@ fn draw_sessions(f: &mut Frame, r: Rect, ws: &[Window], s: &mut State) {
         .header(Row::new(["#", "HOST", "COMMAND", "STATE"]).bottom_margin(1))
         .column_spacing(1)
         .highlight_symbol("▌")
-        .row_highlight_style(Style::default().bg(SELECTED).fg(CYAN)),
+        .row_highlight_style(
+            Style::default()
+                .bg(palette::current().selection_bg)
+                .fg(palette::current().brand),
+        ),
         r,
         &mut s.table,
     );
@@ -945,7 +968,7 @@ fn draw_sessions(f: &mut Frame, r: Rect, ws: &[Window], s: &mut State) {
             f,
             Rect::new(r.x, r.y + 2, r.width, 1),
             "no sessions yet · n New session",
-            DIM,
+            palette::current().text_muted,
         );
     }
 }
@@ -1008,7 +1031,7 @@ pub(crate) fn half(id: &str) -> Result<()> {
                     record.host.user.as_deref().unwrap_or("—"),
                     record.host.hostname
                 ),
-                CYAN,
+                palette::current().brand,
             );
             if connected && snapshot.as_ref().is_none_or(|m| m.fresh()) {
                 health::draw_health(f, rows[1], snapshot.as_ref(), &mut state);
@@ -1017,14 +1040,14 @@ pub(crate) fn half(id: &str) -> Result<()> {
                     f,
                     rows[1],
                     "Disconnected · last reading, not live · F2 full health",
-                    DIM,
+                    palette::current().text_muted,
                 );
             }
             line(
                 f,
                 rows[2],
                 "^A m hide · ^A h / F2 full page · Tab panel",
-                DIM,
+                palette::current().text_muted,
             );
         })?;
         match key()? {

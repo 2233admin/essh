@@ -73,6 +73,27 @@ If your keyboard uses the function row for brightness or volume, hold **Fn**
 while pressing an F-key, or enable standard function keys in your keyboard settings.
 The navigation controls are also clickable, and **F1** lists the available keys.
 
+## Your shell and theme
+
+Remote sessions start the remote account's configured login shell and load its
+normal startup files—zsh, bash, fish, or whichever shell that account uses.
+Your prompt, aliases and shell key bindings come from that remote account.
+Existing shells retain their running state when you reconnect.
+
+ESSH uses your terminal's colors by default. The shell always keeps the terminal's
+own foreground and background, even when you choose a different dashboard theme:
+
+```sh
+essh --theme terminal
+essh --theme light
+essh --theme dark
+```
+
+To save a preference, set `theme = "terminal"` (or another theme name) at the top
+of `~/.essh/config.toml`. Apply it to an open workspace with
+`essh tmux refresh`; SSH sessions keep running. Your terminal emulator controls
+the font and font size.
+
 ## Choose your health view
 
 Press **F2** to cycle through:

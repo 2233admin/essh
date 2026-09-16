@@ -1,9 +1,6 @@
 //! Character-grid rendering of the full health reference.
 use super::*;
 
-const BORDER: Color = Color::Rgb(28, 36, 41);
-const MID: Color = Color::Rgb(139, 154, 166);
-
 fn text(value: impl Into<String>, color: Color) -> Line<'static> {
     Line::styled(value.into(), Style::default().fg(color))
 }
@@ -41,7 +38,7 @@ fn meter(n: Option<f64>, width: u16) -> Line<'static> {
 }
 fn graph(history: &[u64], width: u16, color: Color) -> Line<'static> {
     if history.is_empty() {
-        text("— history unavailable", DIM)
+        text("— history unavailable", palette::current().text_muted)
     } else {
         text(spark(history, usize::from(width)), color)
     }
@@ -60,7 +57,7 @@ fn panel_lines(i: usize, m: &metrics::Snapshot, s: &State, width: u16) -> Vec<Li
     let mut lines = Vec::new();
     match i {
         0 => {
-            lines.push(value(percent(m.cpu), GREEN));
+            lines.push(value(percent(m.cpu), palette::current().status_good));
             lines.push(meter(m.cpu, width));
             lines.push(text(
                 graph_history(
@@ -68,11 +65,11 @@ fn panel_lines(i: usize, m: &metrics::Snapshot, s: &State, width: u16) -> Vec<Li
                     usize::from(width.min(24)),
                     GraphScale::Percent,
                 ),
-                GREEN,
+                palette::current().status_good,
             ));
             lines.push(text(
                 format!("Load 1 / 5 / 15m: {}", d.load.as_deref().unwrap_or("—")),
-                TEXT,
+                palette::current().text_primary,
             ));
             lines.push(text(
                 format!(
@@ -81,10 +78,13 @@ fn panel_lines(i: usize, m: &metrics::Snapshot, s: &State, width: u16) -> Vec<Li
                         .map(|n| format!("{:.1} days", n / 86400.0))
                         .unwrap_or_else(|| "—".into())
                 ),
-                TEXT,
+                palette::current().text_primary,
             ));
             if d.cores.is_empty() {
-                lines.push(text("Per-core usage unavailable", DIM));
+                lines.push(text(
+                    "Per-core usage unavailable",
+                    palette::current().text_muted,
+                ));
             } else {
                 // Pack cores across each row so large machines need less scrolling.
                 let count = (usize::from(width) / 16).max(1);
@@ -95,7 +95,7 @@ fn panel_lines(i: usize, m: &metrics::Snapshot, s: &State, width: u16) -> Vec<Li
                             .map(|(n, v)| {
                                 Span::styled(
                                     format!("cpu{n:02} {:>6}   ", percent(Some(**v))),
-                                    Style::default().fg(TEXT),
+                                    Style::default().fg(palette::current().text_primary),
                                 )
                             })
                             .collect::<Vec<_>>(),
@@ -110,7 +110,7 @@ fn panel_lines(i: usize, m: &metrics::Snapshot, s: &State, width: u16) -> Vec<Li
                 .map(|(t, a)| t.saturating_sub(a));
             lines.push(value(
                 format!("{} / {}", size(used), size(d.mem_total)),
-                GREEN,
+                palette::current().status_good,
             ));
             lines.push(meter(m.mem, width));
             lines.push(text(
@@ -119,7 +119,7 @@ fn panel_lines(i: usize, m: &metrics::Snapshot, s: &State, width: u16) -> Vec<Li
                     size(d.mem_cached),
                     size(d.mem_available)
                 ),
-                TEXT,
+                palette::current().text_primary,
             ));
             lines.push(text(
                 format!(
@@ -131,7 +131,7 @@ fn panel_lines(i: usize, m: &metrics::Snapshot, s: &State, width: u16) -> Vec<Li
                     ),
                     size(d.swap_total)
                 ),
-                TEXT,
+                palette::current().text_primary,
             ));
             lines.push(meter(
                 d.swap_total.zip(d.swap_free).map(|(t, f)| {
@@ -150,7 +150,7 @@ fn panel_lines(i: usize, m: &metrics::Snapshot, s: &State, width: u16) -> Vec<Li
                         .map(|v| format!("{v:.0}ms"))
                         .unwrap_or_else(|| "—".into())
                 ),
-                MID,
+                palette::current().text_secondary,
             ));
             lines.push(text(
                 graph_history(
@@ -158,7 +158,7 @@ fn panel_lines(i: usize, m: &metrics::Snapshot, s: &State, width: u16) -> Vec<Li
                     usize::from(width.min(16)),
                     GraphScale::Latency,
                 ),
-                GREEN,
+                palette::current().status_good,
             ));
         }
         2 => {
@@ -175,17 +175,23 @@ fn panel_lines(i: usize, m: &metrics::Snapshot, s: &State, width: u16) -> Vec<Li
             } else {
                 history.map(|h| h.1.as_slice()).unwrap_or(&[])
             };
-            lines.push(value(format!("↓ RX  {}", rate(rx)), GREEN));
+            lines.push(value(
+                format!("↓ RX  {}", rate(rx)),
+                palette::current().status_good,
+            ));
             lines.push(graph(
                 rx_history,
                 width.min(if s.half { 26 } else { 44 }),
-                GREEN,
+                palette::current().status_good,
             ));
-            lines.push(value(format!("↑ TX  {}", rate(tx)), CYAN));
+            lines.push(value(
+                format!("↑ TX  {}", rate(tx)),
+                palette::current().brand,
+            ));
             lines.push(graph(
                 tx_history,
                 width.min(if s.half { 26 } else { 44 }),
-                CYAN,
+                palette::current().brand,
             ));
             lines.push(text(
                 format!(
@@ -194,12 +200,15 @@ fn panel_lines(i: usize, m: &metrics::Snapshot, s: &State, width: u16) -> Vec<Li
                         .map(|v| format!("{v:.0}ms"))
                         .unwrap_or_else(|| "—".into())
                 ),
-                MID,
+                palette::current().text_secondary,
             ));
         }
         3 => {
             if d.disks.is_empty() {
-                lines.push(text("Filesystem data unavailable", DIM));
+                lines.push(text(
+                    "Filesystem data unavailable",
+                    palette::current().text_muted,
+                ));
             }
             for disk in &d.disks {
                 lines.push(text(
@@ -210,13 +219,13 @@ fn panel_lines(i: usize, m: &metrics::Snapshot, s: &State, width: u16) -> Vec<Li
                         size(Some(disk.total_bytes / 1024)),
                         percent(Some(disk.use_pct))
                     ),
-                    TEXT,
+                    palette::current().text_primary,
                 ));
                 lines.push(meter(Some(disk.use_pct), width));
             }
             lines.push(text(
                 format!("Physical I/O ↓ {}  ↑ {}", rate(d.io_read), rate(d.io_write)),
-                MID,
+                palette::current().text_secondary,
             ));
         }
         4 => {
@@ -228,9 +237,15 @@ fn panel_lines(i: usize, m: &metrics::Snapshot, s: &State, width: u16) -> Vec<Li
                     b.cpu_pct.total_cmp(&a.cpu_pct)
                 }
             });
-            lines.push(text("PID     COMMAND           CPU%       RSS", MID));
+            lines.push(text(
+                "PID     COMMAND           CPU%       RSS",
+                palette::current().text_secondary,
+            ));
             if processes.is_empty() {
-                lines.push(text("Process data unavailable", DIM));
+                lines.push(text(
+                    "Process data unavailable",
+                    palette::current().text_muted,
+                ));
             }
             for p in processes {
                 lines.push(text(
@@ -241,7 +256,7 @@ fn panel_lines(i: usize, m: &metrics::Snapshot, s: &State, width: u16) -> Vec<Li
                         p.cpu_pct,
                         rss(p.mem_rss_kb)
                     ),
-                    TEXT,
+                    palette::current().text_primary,
                 ));
             }
         }
@@ -249,15 +264,18 @@ fn panel_lines(i: usize, m: &metrics::Snapshot, s: &State, width: u16) -> Vec<Li
             let peer_width = usize::from(width.saturating_sub(20)).max(8);
             lines.push(text(
                 format!("{:<peer_width$} {:>8} {:>8}", "PEER", "RX/s", "TX/s"),
-                MID,
+                palette::current().text_secondary,
             ));
             if m.peers.is_empty() {
-                lines.push(text("No TCP peer counters available", DIM));
+                lines.push(text(
+                    "No TCP peer counters available",
+                    palette::current().text_muted,
+                ));
             }
             for (peer, rx, tx) in &m.peers {
                 // Put a long IPv6 endpoint on its own line, keeping rates aligned.
                 if peer.chars().count() > peer_width {
-                    lines.push(text(peer, TEXT));
+                    lines.push(text(peer, palette::current().text_primary));
                     lines.push(text(
                         format!(
                             "{:<peer_width$} {:>8} {:>8}",
@@ -265,7 +283,7 @@ fn panel_lines(i: usize, m: &metrics::Snapshot, s: &State, width: u16) -> Vec<Li
                             metrics::rate(Some(*rx)),
                             metrics::rate(Some(*tx))
                         ),
-                        TEXT,
+                        palette::current().text_primary,
                     ));
                 } else {
                     lines.push(text(
@@ -274,7 +292,7 @@ fn panel_lines(i: usize, m: &metrics::Snapshot, s: &State, width: u16) -> Vec<Li
                             metrics::rate(Some(*rx)),
                             metrics::rate(Some(*tx))
                         ),
-                        TEXT,
+                        palette::current().text_primary,
                     ));
                 }
             }
@@ -315,7 +333,7 @@ pub(super) fn draw_health(
             }
         )
     };
-    line(f, header, title, MID);
+    line(f, header, title, palette::current().text_secondary);
     let body = Rect::new(
         r.x,
         r.y + header.height,
@@ -358,7 +376,11 @@ pub(super) fn draw_health(
                 f,
                 rect,
                 format!(" {name} "),
-                if s.focus == i { CYAN } else { DIM },
+                if s.focus == i {
+                    palette::current().brand
+                } else {
+                    palette::current().text_muted
+                },
             );
             s.hits.push((rect, Click::Panel(i)));
             x += width;
@@ -389,9 +411,13 @@ pub(super) fn draw_health(
             .borders(Borders::TOP)
             .title(Span::styled(
                 format!(" {title} "),
-                Style::default().fg(CYAN).bold(),
+                Style::default().fg(palette::current().brand).bold(),
             ))
-            .border_style(Style::default().fg(if s.focus == i { CYAN } else { BORDER }));
+            .border_style(Style::default().fg(if s.focus == i {
+                palette::current().brand
+            } else {
+                palette::current().border
+            }));
         let inner = block.inner(*rect).inner(Margin::new(1, 0));
         f.render_widget(block, *rect);
         let hint = match i {
@@ -427,7 +453,7 @@ pub(super) fn draw_health(
                 f,
                 Rect::new(inner.x, content.bottom(), inner.width, 1),
                 hint,
-                DIM,
+                palette::current().text_muted,
             );
         }
     }
@@ -507,7 +533,11 @@ mod tests {
         ] {
             assert!(content.contains(expected), "missing {expected}");
         }
-        for (symbol, color) in [("↓", GREEN), ("↑", CYAN), ("─", GREEN)] {
+        for (symbol, color) in [
+            ("↓", palette::current().status_good),
+            ("↑", palette::current().brand),
+            ("─", palette::current().status_good),
+        ] {
             assert!(buffer
                 .content
                 .iter()

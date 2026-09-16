@@ -339,7 +339,7 @@ pub struct HostGroup {
 // ---------------------------------------------------------------------------
 
 fn default_theme() -> String {
-    "dark".to_string()
+    "terminal".to_string()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -423,7 +423,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let cfg = AppConfig::default();
-        assert_eq!(cfg.theme, "dark");
+        assert_eq!(cfg.theme, "terminal");
         assert_eq!(cfg.general.tofu_policy, TofuPolicy::Prompt);
         assert_eq!(cfg.general.cache_ttl, "30d");
         assert_eq!(cfg.general.log_level, "info");
