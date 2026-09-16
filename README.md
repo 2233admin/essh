@@ -1,6 +1,17 @@
-# essh
+<h1 align="center">ESSH</h1>
 
-**An SSH workspace with persistent sessions and live health dashboards.**
+<p align="center">
+  <strong>An SSH workspace with persistent sessions and live health dashboards.</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/matthart1983/essh/releases/latest"><img src="https://img.shields.io/github/v/release/matthart1983/essh" alt="Latest release"></a>
+  <a href="https://github.com/matthart1983/essh/releases"><img src="https://img.shields.io/github/downloads/matthart1983/essh/total" alt="Release downloads"></a>
+  <a href="https://github.com/matthart1983/essh/actions/workflows/ci.yml"><img src="https://github.com/matthart1983/essh/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI status"></a>
+  <a href="#install"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-blue" alt="Platforms: macOS and Linux"></a>
+  <a href="https://github.com/matthart1983/essh/releases/latest"><img src="https://img.shields.io/badge/architecture-x86__64%20%7C%20ARM64-blue" alt="Architectures: x86_64 and ARM64"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT"></a>
+</p>
 
 Keep remote shells running across connection drops, switch between hosts with
 keys or the mouse, and check system health without leaving your terminal.
